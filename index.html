@@ -1,0 +1,596 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Gmail Mail Merge</title>
+<meta name="description" content="Send individual, personalized emails (each with its own link) from your own Gmail, using a CSV. Runs entirely in your browser.">
+<meta name="referrer" content="no-referrer">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Montserrat:wght@400;600;700&display=swap" rel="stylesheet">
+<script src="https://accounts.google.com/gsi/client" async defer></script>
+<style>
+  :root {
+    --bg: #061824; --panel: #0B2D44; --accent: #4FB06D; --accent-2: #8AD09B;
+    --text: #EAF2F6; --muted: #9DB3C1; --line: #1E4560; --danger: #E5737A; --warn: #E9C46A;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--text); font: 15px/1.5 Montserrat, system-ui, sans-serif; }
+  header { padding: 20px 24px; border-bottom: 1px solid var(--line); display: flex; align-items: center; justify-content: space-between; gap: 16px; flex-wrap: wrap; }
+  header h1 { margin: 0; font-size: 18px; letter-spacing: .04em; }
+  header h1 span { color: var(--accent); }
+  main { max-width: 1100px; margin: 0 auto; padding: 24px 16px 80px; display: grid; gap: 20px; }
+  section { background: var(--panel); border: 1px solid var(--line); border-radius: 16px; padding: 20px; }
+  section h2 { margin: 0 0 4px; font-size: 15px; letter-spacing: .06em; text-transform: uppercase; }
+  section h2 b { display: inline-grid; place-items: center; width: 26px; height: 26px; border-radius: 50%; background: var(--accent); color: var(--bg); margin-right: 8px; font-size: 13px; }
+  .hint { color: var(--muted); font-size: 13px; margin: 0 0 14px; }
+  label { display: block; font-size: 12px; font-weight: 600; letter-spacing: .05em; text-transform: uppercase; color: var(--muted); margin: 12px 0 6px; }
+  input[type=text], textarea, select { width: 100%; background: var(--bg); color: var(--text); border: 1px solid var(--line); border-radius: 10px; padding: 10px 12px; font: inherit; }
+  input[type=color] { width: 100%; height: 42px; background: var(--bg); border: 1px solid var(--line); border-radius: 10px; padding: 4px; }
+  textarea { min-height: 260px; resize: vertical; font-family: ui-monospace, Consolas, monospace; font-size: 13px; }
+  button { font: inherit; font-weight: 600; border: 0; border-radius: 999px; padding: 10px 18px; cursor: pointer; background: var(--accent); color: var(--bg); }
+  button.secondary { background: transparent; color: var(--text); border: 1px solid var(--line); }
+  button.danger { background: var(--danger); }
+  button:disabled { opacity: .45; cursor: not-allowed; }
+  .row { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; }
+  .grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; }
+  .grid3 { display: grid; grid-template-columns: 2fr 1fr; gap: 12px; }
+  @media (max-width: 800px) { .grid2, .grid3 { grid-template-columns: 1fr; } }
+  .tag { background: var(--bg); border: 1px solid var(--line); color: var(--accent-2); border-radius: 999px; padding: 4px 10px; font-size: 12px; cursor: pointer; font-family: ui-monospace, Consolas, monospace; }
+  .pill { display: inline-block; border-radius: 999px; padding: 2px 10px; font-size: 12px; font-weight: 600; }
+  .ok { background: rgba(79,176,109,.18); color: var(--accent-2); }
+  .bad { background: rgba(229,115,122,.18); color: var(--danger); }
+  .warnp { background: rgba(233,196,106,.18); color: var(--warn); }
+  .msg { margin-top: 10px; font-size: 13px; }
+  .msg.err { color: var(--danger); } .msg.good { color: var(--accent-2); } .msg.warn { color: var(--warn); }
+  .mapgrid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; }
+  @media (max-width: 800px) { .mapgrid { grid-template-columns: 1fr 1fr; } }
+  table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  th, td { text-align: left; padding: 8px; border-bottom: 1px solid var(--line); white-space: nowrap; }
+  th { color: var(--muted); font-weight: 600; font-size: 12px; text-transform: uppercase; letter-spacing: .05em; }
+  .tablewrap { max-height: 340px; overflow: auto; border: 1px solid var(--line); border-radius: 10px; }
+  iframe { width: 100%; height: 520px; border: 1px solid var(--line); border-radius: 10px; background: #fff; }
+  .progress { height: 10px; background: var(--bg); border-radius: 999px; overflow: hidden; border: 1px solid var(--line); }
+  .progress > div { height: 100%; width: 0; background: var(--accent); transition: width .2s; }
+  .stats { display: flex; gap: 18px; flex-wrap: wrap; font-size: 13px; color: var(--muted); margin: 10px 0; }
+  .stats strong { color: var(--text); font-size: 18px; display: block; }
+  dialog { background: var(--panel); color: var(--text); border: 1px solid var(--line); border-radius: 16px; padding: 24px; max-width: 460px; }
+  dialog::backdrop { background: rgba(0,0,0,.6); }
+  code { font-family: ui-monospace, Consolas, monospace; color: var(--accent-2); }
+  details summary { cursor: pointer; color: var(--muted); font-size: 13px; }
+  details ol { color: var(--muted); font-size: 13px; padding-left: 20px; }
+  footer { text-align: center; color: var(--muted); font-size: 12px; padding: 0 16px 32px; }
+  footer a { color: var(--accent-2); }
+</style>
+</head>
+<body>
+<header>
+  <h1>GMAIL <span>MAIL MERGE</span></h1>
+  <div class="row" id="accountBox"><span class="hint" style="margin:0">Not signed in</span></div>
+</header>
+
+<main>
+  <!-- 1. Sign in -->
+  <section>
+    <h2><b>1</b>Sign in with Google</h2>
+    <p class="hint">Emails are sent from <strong>your own</strong> Gmail account through the Gmail API. This page only asks for permission to <em>send</em> mail. It can't read your inbox. Nothing goes through any other server.</p>
+    <label for="clientId">Your Google OAuth Client ID</label>
+    <input type="text" id="clientId" placeholder="xxxxxxxx.apps.googleusercontent.com" autocomplete="off">
+    <div class="row" style="margin-top:12px">
+      <button id="signInBtn">Sign in with Google</button>
+      <button id="signOutBtn" class="secondary" hidden>Sign out</button>
+    </div>
+    <div id="authMsg" class="msg"></div>
+    <details style="margin-top:12px">
+      <summary>First time? How to get your own Client ID (about 5 minutes, free)</summary>
+      <ol>
+        <li>Go to <code>console.cloud.google.com</code> and create a project, e.g. “My Mail Merge”.</li>
+        <li>APIs &amp; Services → Library → enable <strong>Gmail API</strong>.</li>
+        <li>APIs &amp; Services → OAuth consent screen → External → fill in an app name and your email → add your own Gmail address under <strong>Test users</strong>.</li>
+        <li>Credentials → Create credentials → <strong>OAuth client ID</strong> → Application type: Web application.</li>
+        <li>Authorized JavaScript origins → add <code id="originHint"></code> → Create → paste the Client ID above.</li>
+        <li>When you sign in, Google shows “Google hasn't verified this app”. That's expected, because it's your own app: Continue.</li>
+      </ol>
+    </details>
+  </section>
+
+  <!-- 2. CSV -->
+  <section>
+    <h2><b>2</b>Import CSV &amp; match fields</h2>
+    <p class="hint">One row per recipient. The file stays in this browser tab. It's never uploaded or saved, and it's gone when you close the tab. If your links log people in, treat the CSV like a password file.</p>
+    <input type="file" id="csvFile" accept=".csv,text/csv">
+    <div id="csvMsg" class="msg"></div>
+    <div id="mapping" hidden>
+      <div class="mapgrid">
+        <div><label for="map-firstName">First name</label><select id="map-firstName"></select></div>
+        <div><label for="map-lastName">Last name</label><select id="map-lastName"></select></div>
+        <div><label for="map-email">Email (recipient)</label><select id="map-email"></select></div>
+        <div><label for="map-link">Personal link</label><select id="map-link"></select></div>
+      </div>
+      <label for="linkPrefix">Safety check: links must start with (optional)</label>
+      <input type="text" id="linkPrefix" placeholder="e.g. https://myapp.example.com/access?t=">
+      <div class="stats" id="csvStats"></div>
+      <div class="tablewrap"><table id="rowsTable"></table></div>
+    </div>
+  </section>
+
+  <!-- 3. Template -->
+  <section>
+    <h2><b>3</b>Draft the email</h2>
+    <p class="hint">Click a field to insert it. Any CSV column can be used, e.g. <code>{{Company}}</code>. <code>{{Button}}</code> on its own line becomes a button that opens that person's own link.</p>
+    <div class="grid2">
+      <div>
+        <label for="fromName">From name</label>
+        <input type="text" id="fromName" placeholder="Your name or organization">
+        <label for="subject">Subject</label>
+        <input type="text" id="subject" value="{{FirstName}}, here is your personal link">
+        <div class="grid3">
+          <div><label for="buttonText">Button text</label><input type="text" id="buttonText" value="Open my link"></div>
+          <div><label for="buttonColor">Button colour</label><input type="color" id="buttonColor" value="#4FB06D"></div>
+        </div>
+        <label for="headerText">Email header (optional)</label>
+        <input type="text" id="headerText" placeholder="e.g. ACME EVENTS 2026">
+        <label>Insert field</label>
+        <div class="row" id="tagButtons"></div>
+        <label for="body">Body</label>
+        <textarea id="body"></textarea>
+      </div>
+      <div>
+        <label>Preview <span id="previewWho" style="text-transform:none;letter-spacing:0"></span></label>
+        <div class="row" style="margin-bottom:8px">
+          <button class="secondary" id="prevBtn" type="button">← Prev</button>
+          <button class="secondary" id="nextBtn" type="button">Next →</button>
+        </div>
+        <div style="font-size:13px;margin-bottom:6px"><span class="hint">Subject:</span> <span id="previewSubject"></span></div>
+        <iframe id="preview" title="Email preview" sandbox=""></iframe>
+      </div>
+    </div>
+  </section>
+
+  <!-- 4. Send -->
+  <section>
+    <h2><b>4</b>Test, then send</h2>
+    <p class="hint">Always send yourself a test first. Each person gets their <strong>own</strong> email with their <strong>own</strong> link, never a group email or BCC. Gmail limits: about 500 emails a day for personal accounts, about 2,000 for Google Workspace.</p>
+    <div class="row">
+      <button id="testBtn" disabled>Send test to myself</button>
+      <button id="sendBtn" disabled>Send to all…</button>
+      <button id="stopBtn" class="danger" hidden>Stop</button>
+      <button id="logBtn" class="secondary" hidden>Download send log</button>
+    </div>
+    <div class="stats" id="sendStats"></div>
+    <div class="progress"><div id="bar"></div></div>
+    <div id="sendMsg" class="msg"></div>
+  </section>
+</main>
+
+<footer>Runs entirely in your browser. Your CSV and emails never touch any server except Google's. <a href="https://github.com/ReemAbdelazim/gmail-mail-merge">Source on GitHub</a></footer>
+
+<dialog id="confirmDlg">
+  <h3 style="margin-top:0">Send <span id="dlgCount"></span> emails?</h3>
+  <p class="hint">From <strong id="dlgFrom"></strong>. Each recipient gets their own personalized email. This can't be undone.</p>
+  <label for="dlgType">Type SEND to confirm</label>
+  <input type="text" id="dlgType" autocomplete="off">
+  <div class="row" style="margin-top:16px;justify-content:flex-end">
+    <button class="secondary" id="dlgCancel" type="button">Cancel</button>
+    <button id="dlgOk" type="button" disabled>Send now</button>
+  </div>
+</dialog>
+
+<script>
+"use strict";
+const SCOPES = "https://www.googleapis.com/auth/gmail.send openid email";
+const SEND_INTERVAL_MS = 1200; // stays well under Gmail API per-user rate limits
+const $ = (id) => document.getElementById(id);
+$("originHint").textContent = location.origin;
+
+const DEFAULT_BODY = `Hi {{FirstName}},
+
+Here is your personal link. Tap the button below to open it.
+
+{{Button}}
+
+This link is just for you. Please don't share or forward it.
+
+Thanks,
+{{SenderName}}`;
+
+// ---------- state (CSV is kept in memory only) ----------
+let tokenClient = null, accessToken = null, tokenExpiry = 0, accountEmail = "";
+let headers = [], rows = [], previewIndex = 0;
+let sendState = []; // per row: "", "sent", "failed: <reason>"
+let stopRequested = false, sending = false;
+
+// ---------- persistence: only harmless settings (never the CSV) ----------
+const settingKeys = ["clientId", "fromName", "subject", "body", "buttonText", "buttonColor", "headerText", "linkPrefix"];
+function loadSettings() {
+  for (const key of settingKeys) {
+    try { const v = localStorage.getItem("mailmerge." + key); if (v !== null) $(key).value = v; } catch {}
+  }
+  if (!$("body").value) $("body").value = DEFAULT_BODY;
+}
+function saveSetting(key) { try { localStorage.setItem("mailmerge." + key, $(key).value); } catch {} }
+settingKeys.forEach((k) => $(k).addEventListener("input", () => {
+  saveSetting(k);
+  if (k === "linkPrefix") renderRows();
+  if (k !== "clientId") renderPreview();
+}));
+
+// ---------- Google sign-in ----------
+function setAuthMsg(text, cls = "") { $("authMsg").textContent = text; $("authMsg").className = "msg " + cls; }
+function ensureTokenClient() {
+  const clientId = $("clientId").value.trim();
+  if (!clientId.endsWith(".apps.googleusercontent.com")) { setAuthMsg("Paste a valid OAuth Client ID first (see “First time?” below).", "err"); return false; }
+  if (!window.google?.accounts?.oauth2) { setAuthMsg("Google sign-in is still loading. Try again in a second.", "warn"); return false; }
+  if (!tokenClient || tokenClient._clientId !== clientId) {
+    tokenClient = google.accounts.oauth2.initTokenClient({
+      client_id: clientId,
+      scope: SCOPES,
+      callback: () => {},
+      error_callback: (err) => setAuthMsg("Sign-in was cancelled or failed: " + (err?.type || "unknown") + ". Check that " + location.origin + " is listed under Authorized JavaScript origins.", "err"),
+    });
+    tokenClient._clientId = clientId;
+  }
+  return true;
+}
+function requestToken(prompt) {
+  return new Promise((resolve, reject) => {
+    if (!ensureTokenClient()) return reject(new Error("no client"));
+    tokenClient.callback = async (resp) => {
+      if (resp.error) { setAuthMsg("Sign-in failed: " + resp.error, "err"); return reject(new Error(resp.error)); }
+      if (!google.accounts.oauth2.hasGrantedAllScopes(resp, "https://www.googleapis.com/auth/gmail.send")) {
+        setAuthMsg("Please allow “Send email on your behalf”. Sign in again and tick that box.", "err");
+        return reject(new Error("scope"));
+      }
+      accessToken = resp.access_token;
+      tokenExpiry = Date.now() + (Number(resp.expires_in) - 60) * 1000;
+      try {
+        const info = await fetch("https://openidconnect.googleapis.com/v1/userinfo", { headers: { Authorization: "Bearer " + accessToken } }).then((r) => r.json());
+        accountEmail = info.email || "";
+      } catch { accountEmail = ""; }
+      renderAccount();
+      resolve(accessToken);
+    };
+    tokenClient.requestAccessToken({ prompt });
+  });
+}
+async function getToken() {
+  if (accessToken && Date.now() < tokenExpiry) return accessToken;
+  return requestToken("");
+}
+function renderAccount() {
+  const box = $("accountBox");
+  box.innerHTML = "";
+  const span = document.createElement("span");
+  if (accessToken) { span.className = "pill ok"; span.textContent = "Sending as " + (accountEmail || "your Google account"); }
+  else { span.className = "hint"; span.style.margin = "0"; span.textContent = "Not signed in"; }
+  box.append(span);
+  $("signOutBtn").hidden = !accessToken;
+  $("signInBtn").textContent = accessToken ? "Switch account" : "Sign in with Google";
+  if (accessToken) setAuthMsg("Signed in. Gmail send permission granted.", "good");
+  updateButtons();
+}
+$("signInBtn").onclick = () => requestToken("select_account consent").catch(() => {});
+$("signOutBtn").onclick = () => {
+  if (accessToken) google.accounts.oauth2.revoke(accessToken, () => {});
+  accessToken = null; accountEmail = ""; tokenExpiry = 0;
+  renderAccount(); setAuthMsg("Signed out and permission revoked.");
+};
+
+// ---------- CSV ----------
+function parseCsv(text) {
+  const src = text.replace(/^﻿/, "");
+  const out = []; let row = [], field = "", quoted = false;
+  for (let i = 0; i < src.length; i++) {
+    const c = src[i];
+    if (quoted) {
+      if (c === '"' && src[i + 1] === '"') { field += '"'; i++; }
+      else if (c === '"') quoted = false;
+      else field += c;
+    } else if (c === '"') quoted = true;
+    else if (c === ",") { row.push(field); field = ""; }
+    else if (c === "\n" || c === "\r") {
+      if (c === "\r" && src[i + 1] === "\n") i++;
+      row.push(field); field = "";
+      if (row.some((v) => v.trim())) out.push(row);
+      row = [];
+    } else field += c;
+  }
+  if (field || row.length) { row.push(field); if (row.some((v) => v.trim())) out.push(row); }
+  return out;
+}
+const guesses = {
+  firstName: [/^first\s*name$/i, /first/i, /given/i, /prénom|prenom/i, /^name$/i],
+  lastName: [/^last\s*name$/i, /last/i, /surname|family/i, /^nom$/i],
+  email: [/^e-?mail$/i, /e-?mail/i],
+  link: [/access\s*(url|link)/i, /personal\s*link/i, /link|url/i],
+};
+function guessColumn(field) {
+  for (const re of guesses[field]) { const h = headers.find((x) => re.test(x)); if (h) return h; }
+  return "";
+}
+$("csvFile").onchange = async (event) => {
+  const file = event.target.files[0];
+  if (!file) return;
+  const parsed = parseCsv(await file.text());
+  event.target.value = "";
+  if (parsed.length < 2) { $("csvMsg").textContent = "That CSV has no data rows."; $("csvMsg").className = "msg err"; return; }
+  headers = parsed[0].map((h) => h.trim());
+  rows = parsed.slice(1).map((r) => Object.fromEntries(headers.map((h, i) => [h, (r[i] ?? "").trim()])));
+  sendState = rows.map(() => "");
+  previewIndex = 0;
+  for (const field of FIELDS) {
+    const sel = $("map-" + field);
+    sel.innerHTML = '<option value="">— choose column —</option>' + headers.map((h) => `<option>${escapeHtml(h)}</option>`).join("");
+    sel.value = guessColumn(field);
+    sel.onchange = () => { renderRows(); renderTagButtons(); renderPreview(); };
+  }
+  $("mapping").hidden = false;
+  $("csvMsg").textContent = `Loaded ${rows.length} rows from ${file.name}. Check the matched columns below.`;
+  $("csvMsg").className = "msg good";
+  renderRows(); renderTagButtons(); renderPreview();
+};
+const FIELDS = ["firstName", "lastName", "email", "link"];
+const mapped = (field) => $("map-" + field).value;
+function value(row, field) { const col = mapped(field); return col ? row[col] ?? "" : ""; }
+const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+function rowProblems(row, index) {
+  const problems = [];
+  const email = value(row, "email"), link = value(row, "link"), prefix = $("linkPrefix").value.trim();
+  if (!value(row, "firstName")) problems.push("no first name");
+  if (!EMAIL_RE.test(email)) problems.push("bad email");
+  if (!/^https?:\/\/\S+$/.test(link)) problems.push("bad link");
+  else if (prefix && !link.startsWith(prefix)) problems.push("link doesn't match prefix");
+  const lower = email.toLowerCase();
+  if (email && rows.findIndex((r) => value(r, "email").toLowerCase() === lower) !== index) problems.push("duplicate email");
+  if (/\.(test|invalid|example)$|@example\.(com|org|net)$/i.test(email)) problems.push("test address");
+  return problems;
+}
+function renderRows() {
+  if (!rows.length) return;
+  const problemsByRow = rows.map(rowProblems);
+  const valid = problemsByRow.filter((p) => !p.length).length;
+  $("csvStats").innerHTML =
+    `<div><strong>${rows.length}</strong>rows</div><div><strong>${valid}</strong>ready to send</div>` +
+    `<div><strong>${rows.length - valid}</strong>will be skipped</div>` +
+    `<div><strong>${sendState.filter((s) => s === "sent").length}</strong>already sent</div>`;
+  const head = `<tr><th>#</th><th>First</th><th>Last</th><th>Email</th><th>Link</th><th>Status</th></tr>`;
+  $("rowsTable").innerHTML = head + rows.map((row, i) => {
+    const p = problemsByRow[i];
+    const s = sendState[i];
+    const status = s === "sent" ? '<span class="pill ok">sent</span>'
+      : s.startsWith("failed") ? `<span class="pill bad">${escapeHtml(s)}</span>`
+      : p.length ? `<span class="pill ${p.length === 1 && p[0] === "test address" ? "warnp" : "bad"}">${escapeHtml(p.join(", "))}</span>`
+      : '<span class="pill ok">ready</span>';
+    const link = value(row, "link");
+    return `<tr><td>${i + 1}</td><td>${escapeHtml(value(row, "firstName"))}</td><td>${escapeHtml(value(row, "lastName"))}</td>` +
+      `<td>${escapeHtml(value(row, "email"))}</td><td>${link ? "…" + escapeHtml(link.slice(-6)) : ""}</td><td>${status}</td></tr>`;
+  }).join("");
+  if (!FIELDS.every(mapped)) { $("csvMsg").textContent = "Match all four fields to continue."; $("csvMsg").className = "msg warn"; }
+  updateButtons();
+}
+
+// ---------- template / merge ----------
+const BASE_TAGS = { FirstName: "firstName", LastName: "lastName", Email: "email", Link: "link" };
+function renderTagButtons() {
+  const extra = headers.filter((h) => !Object.values(BASE_TAGS).map(mapped).includes(h));
+  const tags = [...Object.keys(BASE_TAGS), "Button", "SenderName", ...extra];
+  $("tagButtons").innerHTML = "";
+  for (const t of tags) {
+    const b = document.createElement("button");
+    b.type = "button"; b.className = "tag"; b.textContent = `{{${t}}}`;
+    b.onclick = () => insertAtCursor($("body"), `{{${t}}}`);
+    $("tagButtons").append(b);
+  }
+}
+function insertAtCursor(el, text) {
+  const s = el.selectionStart ?? el.value.length, e = el.selectionEnd ?? s;
+  el.value = el.value.slice(0, s) + text + el.value.slice(e);
+  el.focus(); el.selectionStart = el.selectionEnd = s + text.length;
+  el.dispatchEvent(new Event("input"));
+}
+function mergeValue(row, tag) {
+  if (BASE_TAGS[tag]) return value(row, BASE_TAGS[tag]);
+  if (tag === "SenderName") return $("fromName").value.trim();
+  if (tag in row) return row[tag];
+  return null;
+}
+function unknownTags(text) {
+  const sample = rows[0] || Object.fromEntries(headers.map((h) => [h, ""]));
+  return [...text.matchAll(/\{\{\s*([^}]+?)\s*\}\}/g)].map((m) => m[1])
+    .filter((t) => t !== "Button" && !(t in BASE_TAGS) && t !== "SenderName" && mergeValue(sample, t) === null);
+}
+function mergeText(template, row) {
+  const label = $("buttonText").value.trim() || "Open my link";
+  return template.replace(/\{\{\s*([^}]+?)\s*\}\}/g, (_, tag) =>
+    tag === "Button" ? `${label}: ${value(row, "link")}` : mergeValue(row, tag) ?? `{{${tag}}}`);
+}
+function escapeHtml(s) { return String(s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]); }
+function readableOn(hex) {
+  const m = /^#?([0-9a-f]{6})$/i.exec(hex); if (!m) return "#ffffff";
+  const n = parseInt(m[1], 16), r = n >> 16, g = (n >> 8) & 255, b = n & 255;
+  return (0.299 * r + 0.587 * g + 0.114 * b) > 150 ? "#111111" : "#ffffff";
+}
+function buttonHtml(link) {
+  const color = $("buttonColor").value || "#4FB06D";
+  const label = $("buttonText").value.trim() || "Open my link";
+  return `<table role="presentation" cellspacing="0" cellpadding="0" style="margin:24px 0"><tr><td style="border-radius:999px;background:${color}">` +
+    `<a href="${escapeHtml(link)}" style="display:inline-block;padding:14px 28px;font-family:Montserrat,Arial,sans-serif;font-size:16px;font-weight:700;color:${readableOn(color)};text-decoration:none;border-radius:999px">${escapeHtml(label)}</a>` +
+    `</td></tr></table>`;
+}
+function mergeHtml(template, row) {
+  const paragraphs = template.split(/\n{2,}/).map((block) => {
+    if (block.trim() === "{{Button}}") return buttonHtml(value(row, "link"));
+    const inner = escapeHtml(block).replace(/\{\{\s*([^}]+?)\s*\}\}/g, (_, tag) => {
+      const raw = tag.replace(/&amp;/g, "&");
+      if (raw === "Button") return buttonHtml(value(row, "link"));
+      const v = mergeValue(row, raw);
+      return v === null ? `{{${tag}}}` : escapeHtml(v);
+    }).replace(/\n/g, "<br>");
+    return `<p style="margin:0 0 16px">${inner}</p>`;
+  }).join("");
+  const header = $("headerText").value.trim();
+  const headerHtml = header
+    ? `<div style="background:#061824;color:#fff;border-radius:16px 16px 0 0;padding:20px 28px;font-family:Montserrat,Arial,sans-serif;font-weight:700;letter-spacing:.08em;font-size:14px">${escapeHtml(header)}</div>`
+    : "";
+  return `<!doctype html><html><body style="margin:0;background:#f4f7f9">` +
+    `<div style="max-width:560px;margin:0 auto;padding:24px">${headerHtml}` +
+    `<div style="background:#ffffff;border-radius:${header ? "0 0 16px 16px" : "16px"};padding:28px;font-family:Montserrat,Arial,sans-serif;font-size:15px;line-height:1.6;color:#0B2D44">${paragraphs}</div>` +
+    `</div></body></html>`;
+}
+function renderPreview() {
+  const unknown = rows.length ? [...unknownTags($("subject").value), ...unknownTags($("body").value)] : [];
+  if (!rows.length) {
+    $("previewWho").textContent = "(import a CSV to preview)";
+    $("previewSubject").textContent = $("subject").value;
+    $("preview").srcdoc = mergeHtml($("body").value, {});
+    return;
+  }
+  previewIndex = Math.max(0, Math.min(previewIndex, rows.length - 1));
+  const row = rows[previewIndex];
+  $("previewWho").textContent = `for row ${previewIndex + 1} of ${rows.length}: ${value(row, "email")}`;
+  $("previewSubject").textContent = mergeText($("subject").value, row);
+  $("preview").srcdoc = mergeHtml($("body").value, row);
+  $("sendMsg").textContent = unknown.length ? `Unknown field(s) in template: ${[...new Set(unknown)].map((t) => `{{${t}}}`).join(", ")}` : "";
+  $("sendMsg").className = "msg " + (unknown.length ? "err" : "");
+  updateButtons();
+}
+$("prevBtn").onclick = () => { previewIndex--; renderPreview(); };
+$("nextBtn").onclick = () => { previewIndex++; renderPreview(); };
+
+// ---------- MIME + Gmail send ----------
+function b64utf8(str) {
+  const bytes = new TextEncoder().encode(str);
+  let bin = ""; for (let i = 0; i < bytes.length; i += 0x8000) bin += String.fromCharCode(...bytes.subarray(i, i + 0x8000));
+  return btoa(bin);
+}
+const b64url = (str) => b64utf8(str).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+const encodeHeader = (s) => /^[\x20-\x7E]*$/.test(s) ? s : `=?UTF-8?B?${b64utf8(s)}?=`;
+const wrap76 = (s) => s.replace(/.{1,76}/g, "$&\r\n");
+function buildMime(to, subject, text, html) {
+  const boundary = "mm_" + crypto.randomUUID().replace(/-/g, "");
+  const fromName = $("fromName").value.trim().replace(/["\r\n]/g, "");
+  return [
+    `From: ${fromName ? `${encodeHeader(fromName)} <${accountEmail}>` : accountEmail}`,
+    `To: ${to}`,
+    `Subject: ${encodeHeader(subject.replace(/[\r\n]+/g, " "))}`,
+    "MIME-Version: 1.0",
+    `Content-Type: multipart/alternative; boundary="${boundary}"`,
+    "",
+    `--${boundary}`,
+    "Content-Type: text/plain; charset=UTF-8",
+    "Content-Transfer-Encoding: base64",
+    "",
+    wrap76(b64utf8(text)),
+    `--${boundary}`,
+    "Content-Type: text/html; charset=UTF-8",
+    "Content-Transfer-Encoding: base64",
+    "",
+    wrap76(b64utf8(html)),
+    `--${boundary}--`,
+    "",
+  ].join("\r\n");
+}
+async function gmailSend(mime, attempt = 1) {
+  const token = await getToken();
+  const res = await fetch("https://gmail.googleapis.com/gmail/v1/users/me/messages/send", {
+    method: "POST",
+    headers: { Authorization: "Bearer " + token, "Content-Type": "application/json" },
+    body: JSON.stringify({ raw: b64url(mime) }),
+  });
+  if (res.ok) return;
+  if (res.status === 401 && attempt === 1) { accessToken = null; return gmailSend(mime, attempt + 1); }
+  if ((res.status === 429 || res.status >= 500) && attempt <= 4) {
+    await new Promise((r) => setTimeout(r, 2000 * 2 ** attempt));
+    return gmailSend(mime, attempt + 1);
+  }
+  let reason = res.status;
+  try { reason = (await res.json()).error?.message || reason; } catch {}
+  throw new Error(String(reason));
+}
+
+// ---------- test + bulk send ----------
+function updateButtons() {
+  const ready = !!accessToken && rows.length && FIELDS.every(mapped)
+    && !unknownTags($("subject").value).length && !unknownTags($("body").value).length;
+  $("testBtn").disabled = !ready || sending;
+  $("sendBtn").disabled = !ready || sending;
+}
+$("testBtn").onclick = async () => {
+  const row = rows[previewIndex];
+  $("testBtn").disabled = true;
+  try {
+    await gmailSend(buildMime(accountEmail, "[TEST] " + mergeText($("subject").value, row), mergeText($("body").value, row), mergeHtml($("body").value, row)));
+    $("sendMsg").textContent = `Test sent to ${accountEmail} using row ${previewIndex + 1}'s data. Check it on your phone. Remember that the button opens that row's real link.`;
+    $("sendMsg").className = "msg good";
+  } catch (e) {
+    $("sendMsg").textContent = "Test failed: " + e.message; $("sendMsg").className = "msg err";
+  } finally { updateButtons(); }
+};
+function sendable() { return rows.map((r, i) => i).filter((i) => !rowProblems(rows[i], i).length && sendState[i] !== "sent"); }
+$("sendBtn").onclick = () => {
+  const targets = sendable();
+  if (!targets.length) { $("sendMsg").textContent = "Nothing left to send."; return; }
+  $("dlgCount").textContent = targets.length;
+  $("dlgFrom").textContent = accountEmail;
+  $("dlgType").value = ""; $("dlgOk").disabled = true;
+  $("confirmDlg").showModal();
+};
+$("dlgType").oninput = () => { $("dlgOk").disabled = $("dlgType").value.trim() !== "SEND"; };
+$("dlgCancel").onclick = () => $("confirmDlg").close();
+$("dlgOk").onclick = () => { $("confirmDlg").close(); bulkSend(sendable()); };
+$("stopBtn").onclick = () => { stopRequested = true; $("stopBtn").disabled = true; $("sendMsg").textContent = "Stopping after the current email…"; };
+
+async function bulkSend(targets) {
+  sending = true; stopRequested = false;
+  $("stopBtn").hidden = false; $("stopBtn").disabled = false; $("logBtn").hidden = false;
+  $("sendMsg").textContent = ""; updateButtons();
+  let done = 0, ok = 0, failed = 0, quotaHit = false;
+  const started = Date.now();
+  const stats = () => {
+    const left = targets.length - done;
+    $("sendStats").innerHTML = `<div><strong>${ok}</strong>sent</div><div><strong>${failed}</strong>failed</div><div><strong>${left}</strong>remaining</div>` +
+      `<div><strong>~${Math.ceil(left * SEND_INTERVAL_MS / 60000)} min</strong>left</div>`;
+    $("bar").style.width = (done / targets.length * 100) + "%";
+  };
+  stats();
+  for (const i of targets) {
+    if (stopRequested) break;
+    const row = rows[i];
+    const t0 = Date.now();
+    try {
+      await gmailSend(buildMime(value(row, "email"), mergeText($("subject").value, row), mergeText($("body").value, row), mergeHtml($("body").value, row)));
+      sendState[i] = "sent"; ok++;
+    } catch (e) {
+      sendState[i] = "failed: " + e.message; failed++;
+      if (/daily|limit exceeded|quota/i.test(e.message)) { stopRequested = true; quotaHit = true; }
+    }
+    done++; stats(); renderRows();
+    await new Promise((r) => setTimeout(r, Math.max(0, SEND_INTERVAL_MS - (Date.now() - t0))));
+  }
+  sending = false; $("stopBtn").hidden = true;
+  $("sendMsg").textContent = quotaHit
+    ? `Gmail's sending limit was reached after ${ok} emails. Stopped. Press “Send to all…” tomorrow to send the rest.`
+    : `${stopRequested ? "Stopped" : "Done"}: ${ok} sent, ${failed} failed in ${Math.round((Date.now() - started) / 1000)}s.` +
+      (failed ? " Press “Send to all…” again to retry only the failed/unsent rows." : "");
+  $("sendMsg").className = "msg " + (failed || quotaHit ? "warn" : "good");
+  updateButtons();
+}
+
+// Send log WITHOUT links (safe to keep / share).
+$("logBtn").onclick = () => {
+  const esc = (v) => /[",\n]/.test(v) ? `"${v.replace(/"/g, '""')}"` : v;
+  const lines = [["First name", "Last name", "Email", "Status"].join(",")].concat(
+    rows.map((r, i) => [value(r, "firstName"), value(r, "lastName"), value(r, "email"),
+      sendState[i] || (rowProblems(r, i).length ? "skipped: " + rowProblems(r, i).join("; ") : "not sent")].map(esc).join(",")),
+  );
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(new Blob([lines.join("\r\n")], { type: "text/csv" }));
+  a.download = `mail-merge-log-${new Date().toISOString().slice(0, 16).replace(/:/g, "")}.csv`;
+  a.click(); URL.revokeObjectURL(a.href);
+};
+
+window.addEventListener("beforeunload", (e) => { if (sending) { e.preventDefault(); e.returnValue = ""; } });
+loadSettings(); renderPreview(); renderAccount();
+</script>
+</body>
+</html>
