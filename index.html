@@ -459,9 +459,9 @@ function htmlToText(html) {
     else if (!label && /^https?:/i.test(href)) a.append(href);
   });
   doc.querySelectorAll("img").forEach((img) => img.replaceWith(""));
-  doc.querySelectorAll("p,div,tr,li,h1,h2,h3,h4,h5,h6,table").forEach((el) => el.append("\n"));
+  doc.querySelectorAll("p,div,tr,li,h1,h2,h3,h4,h5,h6,table").forEach((el) => { el.before("\n"); el.append("\n"); });
   doc.querySelectorAll("td,th").forEach((el) => el.append(" "));
-  return cleanSignature(doc.body.textContent.replace(/[ \t]+\n/g, "\n").replace(/[ \t]{2,}/g, " "));
+  return cleanSignature(doc.body.textContent.replace(/[ \t]+\n/g, "\n").replace(/[ \t]{2,}/g, " ").replace(/\n\s*\n+/g, "\n"));
 }
 function sigWarnings() {
   const html = $("signatureRich").innerHTML;
@@ -479,7 +479,9 @@ $("signatureRich").addEventListener("paste", (event) => {
   const text = event.clipboardData.getData("text/plain");
   const { html: clean, broken } = html ? sanitizeSignatureHtml(html) : { html: escapeHtml(text).replace(/\n/g, "<br>"), broken: 0 };
   $("signatureRich").dataset.broken = broken;
-  document.execCommand("insertHTML", false, clean);
+  // A paste replaces the whole signature, so pasting again never stacks two copies.
+  $("signatureRich").innerHTML = clean;
+  $("signatureRich").dispatchEvent(new Event("input"));
 });
 $("signatureRich").addEventListener("drop", (event) => event.preventDefault()); // only paste goes through the sanitizer
 $("signatureRich").addEventListener("input", () => {
@@ -541,8 +543,9 @@ $("signature").addEventListener("paste", () => setTimeout(() => {
   if (cleaned !== $("signature").value) { $("signature").value = cleaned; $("signature").dispatchEvent(new Event("input")); }
 }, 0));
 
+// The signature belongs to the body only. Never pass the subject through this.
+const mergeBodyText = (row) => mergeText(withSignature($("body").value), row);
 function mergeText(template, row) {
-  template = withSignature(template);
   const label = $("buttonText").value.trim() || "Open my link";
   return template.replace(/\{\{\s*([^}]+?)\s*\}\}/g, (_, tag) =>
     tag === "Button" ? `${label}: ${value(row, "link")}` : mergeValue(row, tag) ?? `{{${tag}}}`);
@@ -664,6 +667,8 @@ function blockers() {
     const missing = FIELDS.filter((f) => !mapped(f)).map((f) => FIELD_LABELS[f]);
     if (missing.length) list.push(`Match these fields to a CSV column: ${missing.join(", ")}.`);
   }
+  const bodyOnly = [...$("subject").value.matchAll(/\{\{\s*(Signature|Button)\s*\}\}/g)].map((m) => `{{${m[1]}}}`);
+  if (bodyOnly.length) list.push(`${[...new Set(bodyOnly)].join(" and ")} can only be used in the body, not the subject.`);
   const unknown = [...new Set([...unknownTags($("subject").value), ...unknownTags($("body").value)])];
   if (rows.length && unknown.length) list.push(`Fix or remove unknown field(s): ${unknown.map((t) => `{{${t}}}`).join(", ")}. Use the “Insert field” buttons.`);
   return list;
@@ -690,7 +695,7 @@ $("testBtn").onclick = async () => {
   const row = rows[previewIndex];
   $("testBtn").disabled = true;
   try {
-    await gmailSend(buildMime(accountEmail, "[TEST] " + mergeText($("subject").value, row), mergeText($("body").value, row), mergeHtml($("body").value, row)));
+    await gmailSend(buildMime(accountEmail, "[TEST] " + mergeText($("subject").value, row), mergeBodyText(row), mergeHtml($("body").value, row)));
     $("sendMsg").textContent = `Test sent to ${accountEmail} using row ${previewIndex + 1}'s data. Check it on your phone. Remember that the button opens that row's real link.`;
     $("sendMsg").className = "msg good";
   } catch (e) {
@@ -729,7 +734,7 @@ async function bulkSend(targets) {
     const row = rows[i];
     const t0 = Date.now();
     try {
-      await gmailSend(buildMime(value(row, "email"), mergeText($("subject").value, row), mergeText($("body").value, row), mergeHtml($("body").value, row)));
+      await gmailSend(buildMime(value(row, "email"), mergeText($("subject").value, row), mergeBodyText(row), mergeHtml($("body").value, row)));
       sendState[i] = "sent"; ok++;
     } catch (e) {
       sendState[i] = "failed: " + e.message; failed++;
