@@ -134,6 +134,9 @@
         <div class="row" id="tagButtons"></div>
         <label for="body">Body</label>
         <textarea id="body"></textarea>
+        <label for="signature">Email signature (optional)</label>
+        <textarea id="signature" style="min-height:120px" placeholder="Paste your signature here. Only the text is kept; logos, images and styling are removed."></textarea>
+        <p class="hint" style="margin-top:6px">Added at the end of every email, or wherever you put <code>{{Signature}}</code>. Web links and email addresses stay clickable.</p>
       </div>
       <div>
         <label>Preview <span id="previewWho" style="text-transform:none;letter-spacing:0"></span></label>
@@ -157,6 +160,7 @@
       <button id="stopBtn" class="danger" hidden>Stop</button>
       <button id="logBtn" class="secondary" hidden>Download send log</button>
     </div>
+    <div id="readyMsg" class="msg"></div>
     <div class="stats" id="sendStats"></div>
     <div class="progress"><div id="bar"></div></div>
     <div id="sendMsg" class="msg"></div>
@@ -201,7 +205,7 @@ let sendState = []; // per row: "", "sent", "failed: <reason>"
 let stopRequested = false, sending = false;
 
 // ---------- persistence: only harmless settings (never the CSV) ----------
-const settingKeys = ["clientId", "fromName", "subject", "body", "buttonText", "buttonColor", "headerText", "linkPrefix"];
+const settingKeys = ["clientId", "fromName", "subject", "body", "signature", "buttonText", "buttonColor", "headerText", "linkPrefix"];
 function loadSettings() {
   for (const key of settingKeys) {
     try { const v = localStorage.getItem("mailmerge." + key); if (v !== null) $(key).value = v; } catch {}
@@ -330,6 +334,7 @@ $("csvFile").onchange = async (event) => {
   renderRows(); renderTagButtons(); renderPreview();
 };
 const FIELDS = ["firstName", "lastName", "email", "link"];
+const FIELD_LABELS = { firstName: "First name", lastName: "Last name", email: "Email", link: "Personal link" };
 const mapped = (field) => $("map-" + field).value;
 function value(row, field) { const col = mapped(field); return col ? row[col] ?? "" : ""; }
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
@@ -371,9 +376,10 @@ function renderRows() {
 
 // ---------- template / merge ----------
 const BASE_TAGS = { FirstName: "firstName", LastName: "lastName", Email: "email", Link: "link" };
+const TAG_ALIASES = { AccessLink: "link", First: "firstName", Last: "lastName" }; // older templates keep working
 function renderTagButtons() {
   const extra = headers.filter((h) => !Object.values(BASE_TAGS).map(mapped).includes(h));
-  const tags = [...Object.keys(BASE_TAGS), "Button", "SenderName", ...extra];
+  const tags = [...Object.keys(BASE_TAGS), "Button", "SenderName", "Signature", ...extra];
   $("tagButtons").innerHTML = "";
   for (const t of tags) {
     const b = document.createElement("button");
@@ -390,16 +396,50 @@ function insertAtCursor(el, text) {
 }
 function mergeValue(row, tag) {
   if (BASE_TAGS[tag]) return value(row, BASE_TAGS[tag]);
+  if (TAG_ALIASES[tag]) return value(row, TAG_ALIASES[tag]);
   if (tag === "SenderName") return $("fromName").value.trim();
+  if (tag === "Signature") return signatureText();
   if (tag in row) return row[tag];
   return null;
 }
 function unknownTags(text) {
   const sample = rows[0] || Object.fromEntries(headers.map((h) => [h, ""]));
   return [...text.matchAll(/\{\{\s*([^}]+?)\s*\}\}/g)].map((m) => m[1])
-    .filter((t) => t !== "Button" && !(t in BASE_TAGS) && t !== "SenderName" && mergeValue(sample, t) === null);
+    .filter((t) => t !== "Button" && !(t in BASE_TAGS) && !(t in TAG_ALIASES) && t !== "SenderName" && t !== "Signature" && mergeValue(sample, t) === null);
 }
+
+// ---------- signature (plain text only: pasted logos, images and styling are dropped) ----------
+function cleanSignature(text) {
+  return text
+    .replace(/[​-‍﻿]/g, "")                         // zero-width junk from Outlook/Gmail
+    .replace(/ /g, " ")                                       // non-breaking spaces
+    .split(/\r?\n/)
+    .filter((line) => !/^\s*\[(image|cid:|logo|signature|inline image)[^\]]*\]\s*$/i.test(line)) // image placeholders
+    .map((line) => line.replace(/\s+$/, ""))
+    .join("\n")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
+}
+const signatureText = () => cleanSignature($("signature").value);
+// Puts the signature where {{Signature}} is, or at the end if the template doesn't place it.
+function withSignature(template) {
+  if (/\{\{\s*Signature\s*\}\}/.test(template) || !signatureText()) return template;
+  return template.replace(/\s+$/, "") + "\n\n{{Signature}}";
+}
+function signatureHtml() {
+  const linked = escapeHtml(signatureText())
+    .replace(/https?:\/\/[^\s<]+[^\s<.,;:!?)]/g, (url) => `<a href="${url}" style="color:#0B2D44">${url}</a>`)
+    .replace(/(^|[\s(])([A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,})/g, '$1<a href="mailto:$2" style="color:#0B2D44">$2</a>')
+    .replace(/\n/g, "<br>");
+  return `<div style="margin-top:24px;padding-top:16px;border-top:1px solid #e3e9ee;font-size:13px;line-height:1.5;color:#4a5d6b">${linked}</div>`;
+}
+$("signature").addEventListener("paste", () => setTimeout(() => {
+  const cleaned = cleanSignature($("signature").value);
+  if (cleaned !== $("signature").value) { $("signature").value = cleaned; $("signature").dispatchEvent(new Event("input")); }
+}, 0));
+
 function mergeText(template, row) {
+  template = withSignature(template);
   const label = $("buttonText").value.trim() || "Open my link";
   return template.replace(/\{\{\s*([^}]+?)\s*\}\}/g, (_, tag) =>
     tag === "Button" ? `${label}: ${value(row, "link")}` : mergeValue(row, tag) ?? `{{${tag}}}`);
@@ -418,8 +458,10 @@ function buttonHtml(link) {
     `</td></tr></table>`;
 }
 function mergeHtml(template, row) {
+  template = withSignature(template);
   const paragraphs = template.split(/\n{2,}/).map((block) => {
     if (block.trim() === "{{Button}}") return buttonHtml(value(row, "link"));
+    if (block.trim() === "{{Signature}}") return signatureText() ? signatureHtml() : "";
     const inner = escapeHtml(block).replace(/\{\{\s*([^}]+?)\s*\}\}/g, (_, tag) => {
       const raw = tag.replace(/&amp;/g, "&");
       if (raw === "Button") return buttonHtml(value(row, "link"));
@@ -509,11 +551,37 @@ async function gmailSend(mime, attempt = 1) {
 }
 
 // ---------- test + bulk send ----------
+// Explains, in plain words, what is still blocking a send (shown under the Send buttons).
+function blockers() {
+  const list = [];
+  if (!accessToken) list.push("Sign in with Google (step 1).");
+  else if (!accountEmail) list.push("Signed in, but Google didn't share your email address. Sign out, sign in again, and allow “See your email address”.");
+  if (!rows.length) list.push("Import a CSV (step 2).");
+  else {
+    const missing = FIELDS.filter((f) => !mapped(f)).map((f) => FIELD_LABELS[f]);
+    if (missing.length) list.push(`Match these fields to a CSV column: ${missing.join(", ")}.`);
+  }
+  const unknown = [...new Set([...unknownTags($("subject").value), ...unknownTags($("body").value)])];
+  if (rows.length && unknown.length) list.push(`Fix or remove unknown field(s): ${unknown.map((t) => `{{${t}}}`).join(", ")}. Use the “Insert field” buttons.`);
+  return list;
+}
+function sendAllNote() {
+  if (!rows.length || !FIELDS.every(mapped)) return "";
+  const problems = rows.map(rowProblems);
+  if (sendable().length) return "";
+  if (sendState.some((s) => s === "sent") && sendState.every((s, i) => s === "sent" || problems[i].length)) return "Everyone who can receive this email has already been sent it.";
+  const counts = {};
+  problems.flat().forEach((p) => { counts[p] = (counts[p] || 0) + 1; });
+  return `No rows can be sent. All ${rows.length} are skipped (${Object.entries(counts).map(([p, n]) => `${n} × ${p}`).join(", ")}). Check the Status column in step 2.`;
+}
 function updateButtons() {
-  const ready = !!accessToken && rows.length && FIELDS.every(mapped)
-    && !unknownTags($("subject").value).length && !unknownTags($("body").value).length;
+  const block = blockers();
+  const ready = !block.length;
   $("testBtn").disabled = !ready || sending;
-  $("sendBtn").disabled = !ready || sending;
+  $("sendBtn").disabled = !ready || sending || !sendable().length;
+  const note = block.length ? "Not ready yet: " + block.join(" ") : sendAllNote();
+  $("readyMsg").textContent = sending ? "" : note;
+  $("readyMsg").className = "msg " + (block.length ? "warn" : note ? "err" : "");
 }
 $("testBtn").onclick = async () => {
   const row = rows[previewIndex];
