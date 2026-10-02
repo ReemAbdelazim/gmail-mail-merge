@@ -11,7 +11,7 @@ Built for things like event access links, personal sign-up links, or anything el
 - **Sign in with Google.** Mail is sent from your own Gmail or Google Workspace account via the Gmail API.
 - **Import any CSV** and match its columns to First name, Last name, Email and Personal link (auto-detected where possible).
 - **Template with merge fields.** Use `{{FirstName}}`, `{{LastName}}`, `{{Email}}`, `{{Link}}`, `{{SenderName}}`, or **any CSV column** like `{{Company}}`.
-- **Email signature:** paste your existing signature; only the text is kept (logos, images and styling are stripped), links stay clickable. Placed at the end, or wherever you put `{{Signature}}`.
+- **Email signature:** paste your existing signature with its **formatting, colours, logo and social icons** (copied from a sent Gmail email or Gmail → Settings → Signature). It is sanitized (scripts, tracking and unsafe links removed) and warns about images that won't survive email. A **text-only** mode is also available. Placed at the end, or wherever you put `{{Signature}}`.
 - **`{{Button}}`** renders a styled call-to-action button with that person's own link. Button text, colour and an optional header are configurable.
 - **Clear "not ready" messages** explain exactly why sending is blocked (not signed in, unmatched columns, unknown fields, or every row skipped).
 - **Live preview** of every recipient's email before sending.

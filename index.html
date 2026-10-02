@@ -59,6 +59,9 @@
   code { font-family: ui-monospace, Consolas, monospace; color: var(--accent-2); }
   details summary { cursor: pointer; color: var(--muted); font-size: 13px; }
   details ol { color: var(--muted); font-size: 13px; padding-left: 20px; }
+  .sigbox { min-height: 120px; background: #fff; color: #222; border: 1px solid var(--line); border-radius: 10px; padding: 12px; font: 14px Arial, sans-serif; overflow: auto; }
+  .sigbox:empty::before { content: "Paste your signature here. Formatting, colours, logo and icons are kept."; color: #888; }
+  .sigbox img { max-width: 100%; }
   footer { text-align: center; color: var(--muted); font-size: 12px; padding: 0 16px 32px; }
   footer a { color: var(--accent-2); }
 </style>
@@ -134,9 +137,20 @@
         <div class="row" id="tagButtons"></div>
         <label for="body">Body</label>
         <textarea id="body"></textarea>
-        <label for="signature">Email signature (optional)</label>
-        <textarea id="signature" style="min-height:120px" placeholder="Paste your signature here. Only the text is kept; logos, images and styling are removed."></textarea>
-        <p class="hint" style="margin-top:6px">Added at the end of every email, or wherever you put <code>{{Signature}}</code>. Web links and email addresses stay clickable.</p>
+        <div class="row" style="justify-content:space-between;align-items:flex-end">
+          <label for="signatureMode" style="margin-bottom:6px">Email signature (optional)</label>
+          <div class="row" style="gap:8px">
+            <select id="signatureMode" style="width:auto;padding:6px 10px">
+              <option value="rich">Keep formatting, logo &amp; icons</option>
+              <option value="plain">Text only</option>
+            </select>
+            <button type="button" class="secondary" id="sigClear" style="padding:6px 12px">Clear</button>
+          </div>
+        </div>
+        <div id="signatureRich" contenteditable="true" aria-label="Email signature" class="sigbox"></div>
+        <textarea id="signature" style="min-height:120px" placeholder="Paste your signature here. Only the text is kept; logos, images and styling are removed." hidden></textarea>
+        <div id="sigMsg" class="msg"></div>
+        <p class="hint" style="margin-top:6px">Best way to copy it: open an email <strong>you sent</strong> in Gmail (or Gmail → Settings → Signature), select the whole signature, copy, and paste here. It's added at the end of every email, or wherever you put <code>{{Signature}}</code>.</p>
       </div>
       <div>
         <label>Preview <span id="previewWho" style="text-transform:none;letter-spacing:0"></span></label>
@@ -205,7 +219,7 @@ let sendState = []; // per row: "", "sent", "failed: <reason>"
 let stopRequested = false, sending = false;
 
 // ---------- persistence: only harmless settings (never the CSV) ----------
-const settingKeys = ["clientId", "fromName", "subject", "body", "signature", "buttonText", "buttonColor", "headerText", "linkPrefix"];
+const settingKeys = ["clientId", "fromName", "subject", "body", "signature", "signatureMode", "buttonText", "buttonColor", "headerText", "linkPrefix"];
 function loadSettings() {
   for (const key of settingKeys) {
     try { const v = localStorage.getItem("mailmerge." + key); if (v !== null) $(key).value = v; } catch {}
@@ -408,7 +422,92 @@ function unknownTags(text) {
     .filter((t) => t !== "Button" && !(t in BASE_TAGS) && !(t in TAG_ALIASES) && t !== "SenderName" && t !== "Signature" && mergeValue(sample, t) === null);
 }
 
-// ---------- signature (plain text only: pasted logos, images and styling are dropped) ----------
+// ---------- signature: "rich" keeps formatting/logo/icons (sanitized HTML), "plain" keeps text only ----------
+const sigMode = () => $("signatureMode").value;
+const SIG_KEEP_ATTRS = new Set(["style", "href", "src", "alt", "title", "width", "height", "align", "valign", "border",
+  "cellpadding", "cellspacing", "bgcolor", "color", "face", "size", "colspan", "rowspan", "target", "dir"]);
+const SIG_DROP_TAGS = "script,style,iframe,frame,object,embed,form,input,button,textarea,select,option,meta,link,base,title,svg,math,noscript,template,audio,video";
+function sanitizeSignatureHtml(html) {
+  const doc = new DOMParser().parseFromString(html, "text/html");
+  doc.querySelectorAll(SIG_DROP_TAGS).forEach((n) => n.remove());
+  const walker = doc.createTreeWalker(doc.body, NodeFilter.SHOW_COMMENT);
+  const comments = []; while (walker.nextNode()) comments.push(walker.currentNode);
+  comments.forEach((c) => c.remove()); // incl. Outlook <!--[if mso]> blocks
+  for (const el of doc.body.querySelectorAll("*")) {
+    for (const attr of [...el.attributes]) {
+      const name = attr.name.toLowerCase();
+      if (!SIG_KEEP_ATTRS.has(name)) { el.removeAttribute(attr.name); continue; }
+      const v = attr.value.trim();
+      if (name === "href" && !/^(https?:|mailto:|tel:)/i.test(v)) el.removeAttribute(attr.name);
+      if (name === "src" && !/^(https?:|data:image\/(png|jpe?g|gif|webp);)/i.test(v)) el.setAttribute("data-bad-src", v.slice(0, 40)), el.removeAttribute("src");
+      if (name === "style" && /expression\(|javascript:|url\(\s*['"]?\s*javascript/i.test(v)) el.removeAttribute(attr.name);
+    }
+    if (el.tagName === "A") el.setAttribute("target", "_blank");
+  }
+  // images whose source can't travel in an email (cid:, file:, blob:) are removed, but remembered for a warning
+  const broken = [...doc.body.querySelectorAll("img[data-bad-src]")].length;
+  doc.body.querySelectorAll("img[data-bad-src]").forEach((img) => img.remove());
+  doc.body.querySelectorAll("[data-bad-src]").forEach((n) => n.removeAttribute("data-bad-src"));
+  return { html: doc.body.innerHTML.trim(), broken };
+}
+function htmlToText(html) {
+  const doc = new DOMParser().parseFromString(html, "text/html");
+  doc.querySelectorAll("br").forEach((br) => br.replaceWith("\n"));
+  doc.querySelectorAll("a[href]").forEach((a) => {
+    const href = a.getAttribute("href"), label = a.textContent.trim();
+    if (/^https?:/i.test(href) && label && !href.includes(label)) a.append(` (${href})`);
+    else if (!label && /^https?:/i.test(href)) a.append(href);
+  });
+  doc.querySelectorAll("img").forEach((img) => img.replaceWith(""));
+  doc.querySelectorAll("p,div,tr,li,h1,h2,h3,h4,h5,h6,table").forEach((el) => el.append("\n"));
+  doc.querySelectorAll("td,th").forEach((el) => el.append(" "));
+  return cleanSignature(doc.body.textContent.replace(/[ \t]+\n/g, "\n").replace(/[ \t]{2,}/g, " "));
+}
+function sigWarnings() {
+  const html = $("signatureRich").innerHTML;
+  const notes = [];
+  if (/src="data:image/i.test(html)) notes.push("Some images are embedded in the signature itself. Gmail and Outlook often block these. If the logo doesn't show in your test email, upload it somewhere public (e.g. your website) and paste a signature that links to it.");
+  if (/\bsrc="http:\/\//i.test(html)) notes.push("Some images use http:// (not https), so they may not load in some email apps.");
+  if (Number($("signatureRich").dataset.broken || 0)) notes.push(`${$("signatureRich").dataset.broken} image(s) couldn't be kept because they only exist inside your email app (cid:/file:). Copy the signature from a sent email in Gmail on the web instead.`);
+  $("sigMsg").textContent = sigMode() === "rich" ? notes.join(" ") : "";
+  $("sigMsg").className = "msg warn";
+}
+function saveRichSignature() { try { localStorage.setItem("mailmerge.signatureRich", $("signatureRich").innerHTML); } catch {} }
+$("signatureRich").addEventListener("paste", (event) => {
+  event.preventDefault();
+  const html = event.clipboardData.getData("text/html");
+  const text = event.clipboardData.getData("text/plain");
+  const { html: clean, broken } = html ? sanitizeSignatureHtml(html) : { html: escapeHtml(text).replace(/\n/g, "<br>"), broken: 0 };
+  $("signatureRich").dataset.broken = broken;
+  document.execCommand("insertHTML", false, clean);
+});
+$("signatureRich").addEventListener("drop", (event) => event.preventDefault()); // only paste goes through the sanitizer
+$("signatureRich").addEventListener("input", () => {
+  if (!$("signatureRich").textContent.trim() && !$("signatureRich").querySelector("img")) $("signatureRich").innerHTML = "";
+  saveRichSignature(); sigWarnings(); renderPreview();
+});
+$("signatureMode").addEventListener("input", () => {
+  const rich = sigMode() === "rich";
+  if (!rich && !$("signature").value.trim() && $("signatureRich").innerHTML) {
+    $("signature").value = htmlToText($("signatureRich").innerHTML); saveSetting("signature");
+  }
+  $("signatureRich").hidden = !rich; $("signature").hidden = rich;
+  sigWarnings(); renderPreview();
+});
+$("sigClear").onclick = () => {
+  $("signatureRich").innerHTML = ""; $("signature").value = ""; delete $("signatureRich").dataset.broken;
+  saveRichSignature(); saveSetting("signature"); sigWarnings(); renderPreview();
+};
+function loadRichSignature() {
+  try {
+    const saved = localStorage.getItem("mailmerge.signatureRich");
+    if (saved) $("signatureRich").innerHTML = sanitizeSignatureHtml(saved).html;
+  } catch {}
+  const rich = sigMode() === "rich";
+  $("signatureRich").hidden = !rich; $("signature").hidden = rich;
+  sigWarnings();
+}
+
 function cleanSignature(text) {
   return text
     .replace(/[​-‍﻿]/g, "")                         // zero-width junk from Outlook/Gmail
@@ -420,13 +519,17 @@ function cleanSignature(text) {
     .replace(/\n{3,}/g, "\n\n")
     .trim();
 }
-const signatureText = () => cleanSignature($("signature").value);
+const signatureText = () => sigMode() === "rich" ? htmlToText($("signatureRich").innerHTML) : cleanSignature($("signature").value);
+const hasSignature = () => sigMode() === "rich" ? !!($("signatureRich").textContent.trim() || $("signatureRich").querySelector("img")) : !!signatureText();
 // Puts the signature where {{Signature}} is, or at the end if the template doesn't place it.
 function withSignature(template) {
-  if (/\{\{\s*Signature\s*\}\}/.test(template) || !signatureText()) return template;
+  if (/\{\{\s*Signature\s*\}\}/.test(template) || !hasSignature()) return template;
   return template.replace(/\s+$/, "") + "\n\n{{Signature}}";
 }
 function signatureHtml() {
+  if (sigMode() === "rich") {
+    return `<div style="margin-top:24px">${sanitizeSignatureHtml($("signatureRich").innerHTML).html}</div>`;
+  }
   const linked = escapeHtml(signatureText())
     .replace(/https?:\/\/[^\s<]+[^\s<.,;:!?)]/g, (url) => `<a href="${url}" style="color:#0B2D44">${url}</a>`)
     .replace(/(^|[\s(])([A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,})/g, '$1<a href="mailto:$2" style="color:#0B2D44">$2</a>')
@@ -461,7 +564,7 @@ function mergeHtml(template, row) {
   template = withSignature(template);
   const paragraphs = template.split(/\n{2,}/).map((block) => {
     if (block.trim() === "{{Button}}") return buttonHtml(value(row, "link"));
-    if (block.trim() === "{{Signature}}") return signatureText() ? signatureHtml() : "";
+    if (block.trim() === "{{Signature}}") return hasSignature() ? signatureHtml() : "";
     const inner = escapeHtml(block).replace(/\{\{\s*([^}]+?)\s*\}\}/g, (_, tag) => {
       const raw = tag.replace(/&amp;/g, "&");
       if (raw === "Button") return buttonHtml(value(row, "link"));
@@ -658,7 +761,7 @@ $("logBtn").onclick = () => {
 };
 
 window.addEventListener("beforeunload", (e) => { if (sending) { e.preventDefault(); e.returnValue = ""; } });
-loadSettings(); renderPreview(); renderAccount();
+loadSettings(); loadRichSignature(); renderPreview(); renderAccount();
 </script>
 </body>
 </html>
