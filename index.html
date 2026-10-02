@@ -155,6 +155,7 @@
         <div id="signatureRich" contenteditable="true" aria-label="Email signature" class="sigbox"></div>
         <textarea id="signature" style="min-height:120px" placeholder="Paste your signature here. Only the text is kept; logos, images and styling are removed." hidden></textarea>
         <div id="sigMsg" class="msg"></div>
+        <div id="sigImages" class="msg" style="display:grid;gap:4px"></div>
         <p class="hint" style="margin-top:6px">Best way to copy it: open an email <strong>you sent</strong> in Gmail (or Gmail → Settings → Signature), select the whole signature, copy, and paste here. It's added at the end of every email, or wherever you put <code>{{Signature}}</code>.</p>
       </div>
       <div>
@@ -471,7 +472,6 @@ function htmlToText(html) {
 function sigWarnings() {
   const html = $("signatureRich").innerHTML;
   const notes = [];
-  if (/src="data:image/i.test(html)) notes.push("Some images are embedded in the signature itself. Gmail and Outlook often block these. If the logo doesn't show in your test email, upload it somewhere public (e.g. your website) and paste a signature that links to it.");
   if (/\bsrc="http:\/\//i.test(html)) notes.push("Some images use http:// (not https), so they may not load in some email apps.");
   if (Number($("signatureRich").dataset.broken || 0)) notes.push(`${$("signatureRich").dataset.broken} image(s) couldn't be kept because they only exist inside your email app (cid:/file:). Copy the signature from a sent email in Gmail on the web instead.`);
   $("sigMsg").textContent = sigMode() === "rich" ? notes.join(" ") : "";
@@ -492,8 +492,11 @@ $("signatureRich").addEventListener("drop", (event) => event.preventDefault()); 
 $("signatureRich").addEventListener("input", () => {
   if (!$("signatureRich").textContent.trim() && !$("signatureRich").querySelector("img")) $("signatureRich").innerHTML = "";
   saveRichSignature(); sigWarnings(); renderPreview();
+  clearTimeout(sigCheckTimer); sigCheckTimer = setTimeout(checkSignatureImages, 600);
 });
+let sigCheckTimer = 0;
 $("signatureMode").addEventListener("input", () => {
+  setTimeout(checkSignatureImages, 0);
   const rich = sigMode() === "rich";
   if (!rich && !$("signature").value.trim() && $("signatureRich").innerHTML) {
     $("signature").value = htmlToText($("signatureRich").innerHTML); saveSetting("signature");
@@ -503,7 +506,7 @@ $("signatureMode").addEventListener("input", () => {
 });
 $("sigClear").onclick = () => {
   $("signatureRich").innerHTML = ""; $("signature").value = ""; delete $("signatureRich").dataset.broken;
-  saveRichSignature(); saveSetting("signature"); sigWarnings(); renderPreview();
+  saveRichSignature(); saveSetting("signature"); sigWarnings(); renderPreview(); checkSignatureImages();
 };
 function loadRichSignature() {
   try {
@@ -513,6 +516,7 @@ function loadRichSignature() {
   const rich = sigMode() === "rich";
   $("signatureRich").hidden = !rich; $("signature").hidden = rich;
   sigWarnings();
+  checkSignatureImages();
 }
 
 function cleanSignature(text) {
@@ -533,9 +537,11 @@ function withSignature(template) {
   if (/\{\{\s*Signature\s*\}\}/.test(template) || !hasSignature()) return template;
   return template.replace(/\s+$/, "") + "\n\n{{Signature}}";
 }
-function signatureHtml() {
+function signatureHtml(forSend = false) {
   if (sigMode() === "rich") {
-    return `<div style="margin-top:24px">${sanitizeSignatureHtml($("signatureRich").innerHTML).html}</div>`;
+    // When sending, use the version whose images point at the attached copies (cid:).
+    const html = forSend && inlineSig.key ? inlineSig.html : sanitizeSignatureHtml($("signatureRich").innerHTML).html;
+    return `<div style="margin-top:24px">${html}</div>`;
   }
   const linked = escapeHtml(signatureText())
     .replace(/https?:\/\/[^\s<]+[^\s<.,;:!?)]/g, (url) => `<a href="${url}" style="color:#0B2D44">${url}</a>`)
@@ -593,11 +599,11 @@ function buttonHtml(link) {
     `<a href="${escapeHtml(link)}" style="display:inline-block;padding:14px 28px;font-family:Montserrat,Arial,sans-serif;font-size:16px;font-weight:700;color:${readableOn(color)};text-decoration:none;border-radius:999px">${escapeHtml(label)}</a>` +
     `</td></tr></table>`;
 }
-function mergeHtml(template, row) {
+function mergeHtml(template, row, forSend = false) {
   template = withSignature(template);
   const paragraphs = template.split(/\n{2,}/).map((block) => {
     if (block.trim() === "{{Button}}") return buttonHtml(value(row, "link"));
-    if (block.trim() === "{{Signature}}") return hasSignature() ? signatureHtml() : "";
+    if (block.trim() === "{{Signature}}") return hasSignature() ? signatureHtml(forSend) : "";
     // [words]({{Link}}) → the words become a clickable link (pulled out first so they aren't escaped)
     const links = [];
     const withTokens = block.replace(MD_LINK, (_, label, url) => { links.push({ label, url }); return `\u0000${links.length - 1}\u0000`; });
@@ -653,16 +659,100 @@ function b64utf8(str) {
 const b64url = (str) => b64utf8(str).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
 const encodeHeader = (s) => /^[\x20-\x7E]*$/.test(s) ? s : `=?UTF-8?B?${b64utf8(s)}?=`;
 const wrap76 = (s) => s.replace(/.{1,76}/g, "$&\r\n");
-function buildMime(to, subject, text, html) {
+// ---------- signature images: attach them inline (cid:) so recipients see them without loading anything ----------
+// Images embedded in the signature (data:) or only visible while you're signed in (private Google/Drive links)
+// show as broken boxes for recipients. Each image we can read is attached to the email instead.
+let inlineSig = { key: "", html: "", parts: [], report: [] };
+function bytesToB64(buffer) {
+  const bytes = new Uint8Array(buffer); let bin = "";
+  for (let i = 0; i < bytes.length; i += 0x8000) bin += String.fromCharCode(...bytes.subarray(i, i + 0x8000));
+  return btoa(bin);
+}
+async function readImage(src) {
+  const m = /^data:(image\/[a-z+.-]+);base64,(.+)$/i.exec(src);
+  if (m) return { mime: m[1].toLowerCase(), b64: m[2].replace(/\s+/g, "") };
+  const res = await fetch(src, { mode: "cors", credentials: "omit", referrerPolicy: "no-referrer" });
+  const type = (res.headers.get("content-type") || "").split(";")[0].trim().toLowerCase();
+  if (!res.ok || !type.startsWith("image/")) throw new Error(`HTTP ${res.status}`);
+  return { mime: type, b64: bytesToB64(await res.arrayBuffer()) };
+}
+async function prepareInlineSignature() {
+  const source = sigMode() === "rich" ? sanitizeSignatureHtml($("signatureRich").innerHTML).html : "";
+  if (inlineSig.key === source) return inlineSig;
+  const doc = new DOMParser().parseFromString(source, "text/html");
+  const parts = [], report = [], seen = new Map();
+  for (const [i, img] of [...doc.body.querySelectorAll("img[src]")].entries()) {
+    const src = img.getAttribute("src");
+    const label = img.getAttribute("alt") || `Image ${i + 1}`;
+    const host = /^data:/i.test(src) ? "embedded in the signature" : (() => { try { return new URL(src).host; } catch { return src.slice(0, 30); } })();
+    try {
+      let cid = seen.get(src);
+      if (!cid) {
+        const { mime, b64 } = await readImage(src);
+        cid = `sig${i}.${crypto.randomUUID().slice(0, 8)}@mailmerge`;
+        parts.push({ cid, mime, b64, name: `${label.replace(/[^\w.-]+/g, "_").slice(0, 30) || "image"}.${mime.split("/")[1].replace("jpeg", "jpg").replace(/\+.*/, "")}` });
+        seen.set(src, cid);
+      }
+      img.setAttribute("src", `cid:${cid}`);
+      report.push({ label, host, ok: true });
+    } catch {
+      report.push({ label, host, ok: false });
+    }
+  }
+  const totalKb = Math.round(parts.reduce((n, p) => n + p.b64.length * 0.75, 0) / 1024);
+  inlineSig = { key: source, html: doc.body.innerHTML, parts, report, totalKb };
+  return inlineSig;
+}
+async function checkSignatureImages() {
+  const box = $("sigImages");
+  if (sigMode() !== "rich" || !$("signatureRich").querySelector("img")) { box.innerHTML = ""; return; }
+  box.innerHTML = '<span class="hint">Checking signature images…</span>';
+  const { report, totalKb } = await prepareInlineSignature();
+  const bad = report.filter((r) => !r.ok);
+  box.innerHTML =
+    `<div class="hint" style="margin:0 0 4px">Signature images (${report.length}):</div>` +
+    report.map((r, i) => (r.ok
+      ? `<div><span class="pill ok">✓ attached</span> ${escapeHtml(r.label)} <span class="hint">(${escapeHtml(r.host)})</span>`
+      : `<div><span class="pill bad">✗ may show broken</span> ${escapeHtml(r.label)} <span class="hint">(${escapeHtml(r.host)})</span>`) +
+      ` <button type="button" class="secondary sig-replace" data-index="${i}" style="padding:2px 10px;font-size:12px">${r.ok ? "Replace" : "Use a file from my computer"}</button></div>`).join("") +
+    (bad.length ? `<p class="msg warn" style="margin:6px 0 0">The ✗ image(s) couldn't be read, so recipients will try to load them from that website and will probably see a broken box. Click “Use a file from my computer” and pick the original logo/icon file (PNG or JPG), and it will be attached to every email.</p>` : "") +
+    (totalKb > 1500 ? `<p class="msg warn" style="margin:6px 0 0">Signature images add ${totalKb} KB to every email. Smaller images send faster and are less likely to be clipped.</p>` : "");
+}
+
+// Swap one signature image for a local file (embedded as data:, so it gets attached when sending).
+$("sigImages").addEventListener("click", (event) => {
+  const btn = event.target.closest(".sig-replace");
+  if (!btn) return;
+  const picker = document.createElement("input");
+  picker.type = "file"; picker.accept = "image/png,image/jpeg,image/gif,image/webp";
+  picker.onchange = () => {
+    const file = picker.files[0];
+    if (!file) return;
+    if (file.size > 1024 * 1024) { $("sigMsg").textContent = "That image is over 1 MB. Use a smaller logo/icon file so every email stays light."; $("sigMsg").className = "msg warn"; return; }
+    const reader = new FileReader();
+    reader.onload = () => {
+      const img = $("signatureRich").querySelectorAll("img[src]")[Number(btn.dataset.index)];
+      if (!img) return;
+      img.setAttribute("src", reader.result);
+      if (!img.getAttribute("alt")) img.setAttribute("alt", file.name.replace(/\.[^.]+$/, ""));
+      $("signatureRich").dispatchEvent(new Event("input"));
+    };
+    reader.readAsDataURL(file);
+  };
+  picker.click();
+});
+
+function buildMime(to, subject, text, html, images = []) {
   const boundary = "mm_" + crypto.randomUUID().replace(/-/g, "");
+  const related = "mmr_" + crypto.randomUUID().replace(/-/g, "");
   const fromName = $("fromName").value.trim().replace(/["\r\n]/g, "");
-  return [
+  const headers = [
     `From: ${fromName ? `${encodeHeader(fromName)} <${accountEmail}>` : accountEmail}`,
     `To: ${to}`,
     `Subject: ${encodeHeader(subject.replace(/[\r\n]+/g, " "))}`,
     "MIME-Version: 1.0",
-    `Content-Type: multipart/alternative; boundary="${boundary}"`,
-    "",
+  ];
+  const alternative = [
     `--${boundary}`,
     "Content-Type: text/plain; charset=UTF-8",
     "Content-Transfer-Encoding: base64",
@@ -674,6 +764,30 @@ function buildMime(to, subject, text, html) {
     "",
     wrap76(b64utf8(html)),
     `--${boundary}--`,
+  ];
+  if (!images.length) {
+    return [...headers, `Content-Type: multipart/alternative; boundary="${boundary}"`, "", ...alternative, ""].join("\r\n");
+  }
+  // multipart/related = the message + its inline images (referenced from the HTML as cid:...)
+  return [
+    ...headers,
+    `Content-Type: multipart/related; type="multipart/alternative"; boundary="${related}"`,
+    "",
+    `--${related}`,
+    `Content-Type: multipart/alternative; boundary="${boundary}"`,
+    "",
+    ...alternative,
+    ...images.flatMap((img) => [
+      `--${related}`,
+      `Content-Type: ${img.mime}; name="${img.name}"`,
+      "Content-Transfer-Encoding: base64",
+      `Content-ID: <${img.cid}>`,
+      `X-Attachment-Id: ${img.cid.split("@")[0]}`,
+      `Content-Disposition: inline; filename="${img.name}"`,
+      "",
+      wrap76(img.b64),
+    ]),
+    `--${related}--`,
     "",
   ].join("\r\n");
 }
@@ -734,7 +848,8 @@ $("testBtn").onclick = async () => {
   const row = rows[previewIndex];
   $("testBtn").disabled = true;
   try {
-    await gmailSend(buildMime(accountEmail, "[TEST] " + mergeText($("subject").value, row), mergeBodyText(row), mergeHtml($("body").value, row)));
+    const { parts } = await prepareInlineSignature();
+    await gmailSend(buildMime(accountEmail, "[TEST] " + mergeText($("subject").value, row), mergeBodyText(row), mergeHtml($("body").value, row, true), parts));
     $("sendMsg").textContent = `Test sent to ${accountEmail} using row ${previewIndex + 1}'s data. Check it on your phone. Remember that the button opens that row's real link.`;
     $("sendMsg").className = "msg good";
   } catch (e) {
@@ -759,6 +874,7 @@ async function bulkSend(targets) {
   sending = true; stopRequested = false;
   $("stopBtn").hidden = false; $("stopBtn").disabled = false; $("logBtn").hidden = false;
   $("sendMsg").textContent = ""; updateButtons();
+  const { parts: sigParts } = await prepareInlineSignature(); // read signature images once for the whole batch
   let done = 0, ok = 0, failed = 0, quotaHit = false;
   const started = Date.now();
   const stats = () => {
@@ -773,7 +889,7 @@ async function bulkSend(targets) {
     const row = rows[i];
     const t0 = Date.now();
     try {
-      await gmailSend(buildMime(value(row, "email"), mergeText($("subject").value, row), mergeBodyText(row), mergeHtml($("body").value, row)));
+      await gmailSend(buildMime(value(row, "email"), mergeText($("subject").value, row), mergeBodyText(row), mergeHtml($("body").value, row, true), sigParts));
       sendState[i] = "sent"; ok++;
     } catch (e) {
       sendState[i] = "failed: " + e.message; failed++;
