@@ -12,7 +12,7 @@ Built for things like event access links, personal sign-up links, or anything el
 - **Import any CSV** and match its columns to First name, Last name, Email and Personal link (auto-detected where possible).
 - **Template with merge fields.** Use `{{FirstName}}`, `{{LastName}}`, `{{Email}}`, `{{Link}}`, `{{SenderName}}`, or **any CSV column** like `{{Company}}`.
 - **Email signature:** paste your existing signature with its **formatting, colours, logo and social icons** (copied from a sent Gmail email or Gmail → Settings → Signature). It is sanitized (scripts, tracking and unsafe links removed) and warns about images that won't survive email. A **text-only** mode is also available. Placed at the end, or wherever you put `{{Signature}}`.
-- **`{{Button}}`** renders a styled call-to-action button with that person's own link. Button text, colour and an optional header are configurable.
+- **`{{Button}}`** renders a styled call-to-action button with that person's own link hidden behind it. Or put the link behind any words with `[Open my invite]({{Link}})`. The tool warns (with a one-click fix) if the raw link would also show as text. Button text, colour and an optional header are configurable.
 - **Clear "not ready" messages** explain exactly why sending is blocked (not signed in, unmatched columns, unknown fields, or every row skipped).
 - **Live preview** of every recipient's email before sending.
 - **Safety checks:** invalid or duplicate emails, missing links, links that don't match an expected prefix, and test addresses (`.test`, `example.com`) are flagged and skipped.

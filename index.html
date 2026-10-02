@@ -137,6 +137,11 @@
         <div class="row" id="tagButtons"></div>
         <label for="body">Body</label>
         <textarea id="body"></textarea>
+        <div id="linkNote" class="msg warn" hidden>
+          Your email shows the link twice: as the button <em>and</em> as the raw web address (<code>{{Link}}</code>). The button already opens it.
+          <button type="button" class="secondary" id="removeRawLink" style="padding:4px 12px;margin-left:6px">Remove the raw link</button>
+        </div>
+        <p class="hint" style="margin-top:6px">Want a link behind words instead of a button? Write <code>[Open My Congress App]({{Link}})</code>.</p>
         <div class="row" style="justify-content:space-between;align-items:flex-end">
           <label for="signatureMode" style="margin-bottom:6px">Email signature (optional)</label>
           <div class="row" style="gap:8px">
@@ -545,11 +550,36 @@ $("signature").addEventListener("paste", () => setTimeout(() => {
 
 // The signature belongs to the body only. Never pass the subject through this.
 const mergeBodyText = (row) => mergeText(withSignature($("body").value), row);
+const MD_LINK = /\[([^\]\n]+)\]\(\s*([^)\s]+)\s*\)/g;
 function mergeText(template, row) {
   const label = $("buttonText").value.trim() || "Open my link";
-  return template.replace(/\{\{\s*([^}]+?)\s*\}\}/g, (_, tag) =>
-    tag === "Button" ? `${label}: ${value(row, "link")}` : mergeValue(row, tag) ?? `{{${tag}}}`);
+  return template
+    .replace(MD_LINK, (_, words, url) => `${words}: ${url}`) // text-only emails can't hide links behind words
+    .replace(/\{\{\s*([^}]+?)\s*\}\}/g, (_, tag) =>
+      tag === "Button" ? `${label}: ${value(row, "link")}` : mergeValue(row, tag) ?? `{{${tag}}}`);
 }
+// The link shows twice if the body has a button AND the raw {{Link}} as visible text.
+const RAW_LINK = "\\{\\{\\s*(?:Link|AccessLink)\\s*\\}\\}";
+const hasRawLink = (body) => new RegExp(RAW_LINK).test(body.replace(MD_LINK, "")); // [words]({{Link}}) doesn't count
+function renderLinkNote() {
+  const body = $("body").value;
+  $("linkNote").hidden = !(/\{\{\s*Button\s*\}\}/.test(body) && hasRawLink(body));
+}
+// Lines that are just the link (optionally with a short label like "Your link:") are removed entirely;
+// elsewhere only the {{Link}} itself is taken out. [words]({{Link}}) is left alone.
+$("removeRawLink").onclick = () => {
+  const keep = [];
+  let body = $("body").value.replace(MD_LINK, (m) => { keep.push(m); return `\u0001${keep.length - 1}\u0001`; });
+  body = body
+    .split("\n")
+    .filter((line) => !new RegExp(`^\\s*([^\\n:{}]{0,40}:)?\\s*${RAW_LINK}\\s*$`).test(line))
+    .map((line) => line.replace(new RegExp(`\\s*${RAW_LINK}`, "g"), ""))
+    .join("\n")
+    .replace(/\u0001(\d+)\u0001/g, (_, i) => keep[i])
+    .replace(/\n{3,}/g, "\n\n");
+  $("body").value = body;
+  $("body").dispatchEvent(new Event("input"));
+};
 function escapeHtml(s) { return String(s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]); }
 function readableOn(hex) {
   const m = /^#?([0-9a-f]{6})$/i.exec(hex); if (!m) return "#ffffff";
@@ -568,11 +598,19 @@ function mergeHtml(template, row) {
   const paragraphs = template.split(/\n{2,}/).map((block) => {
     if (block.trim() === "{{Button}}") return buttonHtml(value(row, "link"));
     if (block.trim() === "{{Signature}}") return hasSignature() ? signatureHtml() : "";
-    const inner = escapeHtml(block).replace(/\{\{\s*([^}]+?)\s*\}\}/g, (_, tag) => {
+    // [words]({{Link}}) → the words become a clickable link (pulled out first so they aren't escaped)
+    const links = [];
+    const withTokens = block.replace(MD_LINK, (_, label, url) => { links.push({ label, url }); return `\u0000${links.length - 1}\u0000`; });
+    const inner = escapeHtml(withTokens).replace(/\{\{\s*([^}]+?)\s*\}\}/g, (_, tag) => {
       const raw = tag.replace(/&amp;/g, "&");
       if (raw === "Button") return buttonHtml(value(row, "link"));
       const v = mergeValue(row, raw);
       return v === null ? `{{${tag}}}` : escapeHtml(v);
+    }).replace(/\u0000(\d+)\u0000/g, (_, i) => {
+      const url = mergeText(links[i].url, row).trim(), label = mergeText(links[i].label, row);
+      return /^(https?:|mailto:|tel:)/i.test(url)
+        ? `<a href="${escapeHtml(url)}" style="color:${$("buttonColor").value || "#4FB06D"};font-weight:700">${escapeHtml(label)}</a>`
+        : escapeHtml(label);
     }).replace(/\n/g, "<br>");
     return `<p style="margin:0 0 16px">${inner}</p>`;
   }).join("");
@@ -586,6 +624,7 @@ function mergeHtml(template, row) {
     `</div></body></html>`;
 }
 function renderPreview() {
+  renderLinkNote();
   const unknown = rows.length ? [...unknownTags($("subject").value), ...unknownTags($("body").value)] : [];
   if (!rows.length) {
     $("previewWho").textContent = "(import a CSV to preview)";
