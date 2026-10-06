@@ -144,8 +144,16 @@
         <input type="text" id="headerText" placeholder="e.g. ACME EVENTS 2026">
         <label>Insert field</label>
         <div class="row" id="tagButtons"></div>
-        <label for="body">Body</label>
+        <div class="row" style="justify-content:space-between;align-items:flex-end">
+          <label for="body" style="margin-bottom:6px">Body</label>
+          <div class="row" style="gap:6px" role="toolbar" aria-label="Text formatting">
+            <button type="button" class="secondary fmt" data-mark="**" title="Bold (Ctrl+B)" style="padding:4px 12px;font-weight:800">B</button>
+            <button type="button" class="secondary fmt" data-mark="*" title="Italic (Ctrl+I)" style="padding:4px 13px;font-style:italic;font-family:Georgia,serif">I</button>
+            <button type="button" class="secondary fmt" data-mark="__" title="Underline (Ctrl+U)" style="padding:4px 12px;text-decoration:underline">U</button>
+          </div>
+        </div>
         <textarea id="body"></textarea>
+        <p class="hint" style="margin-top:6px">Select text and click <b>B</b>, <i>I</i> or <u>U</u> (or Ctrl+B / Ctrl+I / Ctrl+U). In the box it shows as <code>**bold**</code>, <code>*italic*</code>, <code>__underline__</code>; the email shows the real formatting.</p>
         <div id="emptyNote" class="msg warn"></div>
         <div id="noLinkNote" class="msg warn" hidden>
           Your CSV has no personal link column, but this email uses <code>{{Button}}</code> or <code>{{Link}}</code>.
@@ -679,9 +687,59 @@ $("signature").addEventListener("paste", () => setTimeout(() => {
 // The signature belongs to the body only. Never pass the subject through this.
 const mergeBodyText = (row) => mergeText(withSignature($("body").value), row);
 const MD_LINK = /\[([^\]\n]+)\]\(\s*([^)\s]+)\s*\)/g;
+// ---------- bold / italic / underline: **bold**, *italic*, __underline__ ----------
+const FMT = [
+  { re: /\*\*\*(?=\S)([^\n]*?\S)\*\*\*/g, open: "<strong><em>", close: "</em></strong>" }, // bold + italic
+  { re: /\*\*(?=\S)([^\n]*?\S)\*\*/g, open: "<strong>", close: "</strong>" },
+  { re: /__(?=\S)([^\n]*?\S)__/g, open: "<u>", close: "</u>" },
+  { re: /(^|[^*])\*(?=[^\s*])([^*\n]*?[^\s*])\*(?!\*)/g, open: "<em>", close: "</em>", keepLead: true },
+];
+// Formatting is applied to the template only (before fields are filled in), so a "*" inside someone's data stays literal.
+function applyFormatting(escaped) {
+  let out = escaped;
+  for (const { re, open, close, keepLead } of FMT) {
+    out = out.replace(re, keepLead ? (_, lead, inner) => `${lead}${open}${inner}${close}` : (_, inner) => `${open}${inner}${close}`);
+  }
+  return out;
+}
+function stripFormatting(text) {
+  let out = text;
+  for (const { re, keepLead } of FMT) out = out.replace(re, keepLead ? "$1$2" : "$1");
+  return out;
+}
+function toggleMark(el, mark) {
+  const s = el.selectionStart, e = el.selectionEnd, v = el.value, n = mark.length;
+  const sel = v.slice(s, e);
+  // already wrapped (markers just outside or inside the selection) → unwrap
+  if (v.slice(s - n, s) === mark && v.slice(e, e + n) === mark && !(mark === "*" && (v[s - n - 1] === "*" || v[e + n] === "*"))) {
+    el.value = v.slice(0, s - n) + sel + v.slice(e + n);
+    el.setSelectionRange(s - n, e - n);
+  } else if (sel.length > 2 * n && sel.startsWith(mark) && sel.endsWith(mark)) {
+    el.value = v.slice(0, s) + sel.slice(n, -n) + v.slice(e);
+    el.setSelectionRange(s, e - 2 * n);
+  } else {
+    // keep surrounding spaces outside the markers ("**word** " not "**word **")
+    const lead = sel.match(/^\s*/)[0], trail = sel.match(/\s*$/)[0], core = sel.trim();
+    el.value = v.slice(0, s) + lead + mark + core + mark + trail + v.slice(e);
+    const start = s + lead.length + n;
+    el.setSelectionRange(start, start + core.length);
+  }
+  el.focus();
+  el.dispatchEvent(new Event("input"));
+}
+document.querySelectorAll(".fmt").forEach((b) => {
+  b.addEventListener("mousedown", (ev) => ev.preventDefault()); // keep the text selection
+  b.onclick = () => toggleMark($("body"), b.dataset.mark);
+});
+$("body").addEventListener("keydown", (ev) => {
+  if (!(ev.ctrlKey || ev.metaKey) || ev.altKey) return;
+  const mark = { b: "**", i: "*", u: "__" }[ev.key.toLowerCase()];
+  if (mark) { ev.preventDefault(); toggleMark($("body"), mark); }
+});
+
 function mergeText(template, row) {
   const label = $("buttonText").value.trim() || "Open my link";
-  return template
+  return stripFormatting(template)
     .replace(MD_LINK, (_, words, url) => `${words}: ${url}`) // text-only emails can't hide links behind words
     .replace(/\{\{\s*([^}]+?)\s*\}\}/g, (_, tag) =>
       tag === "Button" ? `${label}: ${value(row, "link")}` : mergeValue(row, tag) ?? `{{${tag}}}`);
@@ -729,7 +787,7 @@ function mergeHtml(template, row, forSend = false) {
     // [words]({{Link}}) → the words become a clickable link (pulled out first so they aren't escaped)
     const links = [];
     const withTokens = block.replace(MD_LINK, (_, label, url) => { links.push({ label, url }); return `\u0000${links.length - 1}\u0000`; });
-    const inner = escapeHtml(withTokens).replace(/\{\{\s*([^}]+?)\s*\}\}/g, (_, tag) => {
+    const inner = applyFormatting(escapeHtml(withTokens)).replace(/\{\{\s*([^}]+?)\s*\}\}/g, (_, tag) => {
       const raw = tag.replace(/&amp;/g, "&");
       if (raw === "Button") return buttonHtml(value(row, "link"));
       const v = mergeValue(row, raw);
