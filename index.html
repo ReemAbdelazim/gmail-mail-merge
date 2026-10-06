@@ -59,6 +59,11 @@
   code { font-family: ui-monospace, Consolas, monospace; color: var(--accent-2); }
   details summary { cursor: pointer; color: var(--muted); font-size: 13px; }
   details ol { color: var(--muted); font-size: 13px; padding-left: 20px; }
+  body.no-link .link-only { display: none !important; }
+  .colchip { background: var(--bg); border: 1px solid var(--line); border-radius: 10px; padding: 6px 10px; font-size: 12px; cursor: pointer; text-align: left; color: var(--text); font-weight: 400; }
+  .colchip b { color: var(--accent-2); font-family: ui-monospace, Consolas, monospace; font-weight: 600; display: block; }
+  .colchip span { color: var(--muted); }
+  .colchip.role { border-color: var(--accent); }
   .sigbox { min-height: 120px; background: #fff; color: #222; border: 1px solid var(--line); border-radius: 10px; padding: 12px; font: 14px Arial, sans-serif; overflow: auto; }
   .sigbox:empty::before { content: "Paste your signature here. Formatting, colours, logo and icons are kept."; color: #888; }
   .sigbox img { max-width: 100%; }
@@ -108,10 +113,14 @@
         <div><label for="map-firstName">First name</label><select id="map-firstName"></select></div>
         <div><label for="map-lastName">Last name</label><select id="map-lastName"></select></div>
         <div><label for="map-email">Email (recipient)</label><select id="map-email"></select></div>
-        <div><label for="map-link">Personal link</label><select id="map-link"></select></div>
+        <div><label for="map-link">Personal link (optional)</label><select id="map-link"></select></div>
       </div>
-      <label for="linkPrefix">Safety check: links must start with (optional)</label>
-      <input type="text" id="linkPrefix" placeholder="e.g. https://myapp.example.com/access?t=">
+      <div class="link-only">
+        <label for="linkPrefix">Safety check: links must start with (optional)</label>
+        <input type="text" id="linkPrefix" placeholder="e.g. https://myapp.example.com/access?t=">
+      </div>
+      <label>Columns found in your CSV (all usable in the email)</label>
+      <div class="row" id="columnList"></div>
       <div class="stats" id="csvStats"></div>
       <div class="tablewrap"><table id="rowsTable"></table></div>
     </div>
@@ -120,14 +129,14 @@
   <!-- 3. Template -->
   <section>
     <h2><b>3</b>Draft the email</h2>
-    <p class="hint">Click a field to insert it. Any CSV column can be used, e.g. <code>{{Company}}</code>. <code>{{Button}}</code> on its own line becomes a button that opens that person's own link.</p>
+    <p class="hint">Click a field to insert it. Every column in your CSV is available, e.g. <code>{{% of Goal Raised}}</code>. If some people have an empty cell, add a fallback after a <code>|</code>: <code>{{% of Goal Raised|0%}}</code>. <span class="link-only"><code>{{Button}}</code> on its own line becomes a button that opens that person's own link.</span></p>
     <div class="grid2">
       <div>
         <label for="fromName">From name</label>
         <input type="text" id="fromName" placeholder="Your name or organization">
         <label for="subject">Subject</label>
         <input type="text" id="subject" value="{{FirstName}}, here is your personal link">
-        <div class="grid3">
+        <div class="grid3 link-only">
           <div><label for="buttonText">Button text</label><input type="text" id="buttonText" value="Open my link"></div>
           <div><label for="buttonColor">Button colour</label><input type="color" id="buttonColor" value="#4FB06D"></div>
         </div>
@@ -137,11 +146,16 @@
         <div class="row" id="tagButtons"></div>
         <label for="body">Body</label>
         <textarea id="body"></textarea>
+        <div id="emptyNote" class="msg warn"></div>
+        <div id="noLinkNote" class="msg warn" hidden>
+          Your CSV has no personal link column, but this email uses <code>{{Button}}</code> or <code>{{Link}}</code>.
+          <button type="button" class="secondary" id="stripLinks" style="padding:4px 12px;margin-left:6px">Remove link parts</button>
+        </div>
         <div id="linkNote" class="msg warn" hidden>
           Your email shows the link twice: as the button <em>and</em> as the raw web address (<code>{{Link}}</code>). The button already opens it.
           <button type="button" class="secondary" id="removeRawLink" style="padding:4px 12px;margin-left:6px">Remove the raw link</button>
         </div>
-        <p class="hint" style="margin-top:6px">Want a link behind words instead of a button? Write <code>[Open My Congress App]({{Link}})</code>.</p>
+        <p class="hint link-only" style="margin-top:6px">Want a link behind words instead of a button? Write <code>[Open My Congress App]({{Link}})</code>.</p>
         <div class="row" style="justify-content:space-between;align-items:flex-end">
           <label for="signatureMode" style="margin-bottom:6px">Email signature (optional)</label>
           <div class="row" style="gap:8px">
@@ -326,7 +340,7 @@ const guesses = {
   firstName: [/^first\s*name$/i, /first/i, /given/i, /prénom|prenom/i, /^name$/i],
   lastName: [/^last\s*name$/i, /last/i, /surname|family/i, /^nom$/i],
   email: [/^e-?mail$/i, /e-?mail/i],
-  link: [/access\s*(url|link)/i, /personal\s*link/i, /link|url/i],
+  link: [/access\s*(url|link)/i, /personal\s*link/i, /\blink\b/i, /\burl\b/i],
 };
 function guessColumn(field) {
   for (const re of guesses[field]) { const h = headers.find((x) => re.test(x)); if (h) return h; }
@@ -344,27 +358,68 @@ $("csvFile").onchange = async (event) => {
   previewIndex = 0;
   for (const field of FIELDS) {
     const sel = $("map-" + field);
-    sel.innerHTML = '<option value="">— choose column —</option>' + headers.map((h) => `<option>${escapeHtml(h)}</option>`).join("");
+    const none = field === "link" ? "— no link column —" : "— choose column —";
+    sel.innerHTML = `<option value="">${none}</option>` + headers.map((h) => `<option>${escapeHtml(h)}</option>`).join("");
     sel.value = guessColumn(field);
-    sel.onchange = () => { renderRows(); renderTagButtons(); renderPreview(); };
+    sel.onchange = () => { syncLinkUi(); renderRows(); renderTagButtons(); renderPreview(); };
   }
   $("mapping").hidden = false;
-  $("csvMsg").textContent = `Loaded ${rows.length} rows from ${file.name}. Check the matched columns below.`;
-  $("csvMsg").className = "msg good";
+  syncLinkUi();
+  const missing = REQUIRED.filter((f) => !mapped(f)).map((f) => FIELD_LABELS[f]);
+  $("csvMsg").textContent = `Loaded ${rows.length} rows and ${headers.length} columns from ${file.name}.` +
+    (missing.length ? ` Couldn't find ${missing.join(", ")}. Pick ${missing.length > 1 ? "those columns" : "that column"} below. First name, Last name and Email are required.` : " Check the matched columns below.");
+  $("csvMsg").className = "msg " + (missing.length ? "warn" : "good");
   renderRows(); renderTagButtons(); renderPreview();
 };
-const FIELDS = ["firstName", "lastName", "email", "link"];
+
+// First name, Last name and Email are required; the personal link is optional.
+const REQUIRED = ["firstName", "lastName", "email"];
+const FIELDS = [...REQUIRED, "link"];
 const FIELD_LABELS = { firstName: "First name", lastName: "Last name", email: "Email", link: "Personal link" };
 const mapped = (field) => $("map-" + field).value;
+const hasLink = () => !!mapped("link");
 function value(row, field) { const col = mapped(field); return col ? row[col] ?? "" : ""; }
+const LINK_TAG = /\{\{\s*(Button|Link|AccessLink)\s*(\|[^}]*)?\}\}/;
+const usesLink = () => LINK_TAG.test($("body").value) || LINK_TAG.test($("subject").value);
+const DEFAULT_BODY_NO_LINK = `Hi {{FirstName}},
+
+Thank you for being part of this.
+
+Thanks,
+{{SenderName}}`;
+// Hide everything about links/buttons when the CSV has no link column.
+function syncLinkUi() {
+  const noLink = rows.length > 0 && !hasLink();
+  document.body.classList.toggle("no-link", noLink);
+  if (noLink && $("body").value.trim() === DEFAULT_BODY.trim()) {
+    $("body").value = DEFAULT_BODY_NO_LINK; saveSetting("body");
+    if ($("subject").value === "{{FirstName}}, here is your personal link") { $("subject").value = "A note for you, {{FirstName}}"; saveSetting("subject"); }
+  }
+}
+// Removes {{Button}} lines, raw {{Link}}s, and turns [words]({{Link}}) into plain words.
+function stripLinkParts(text) {
+  return text
+    .replace(/\[([^\]\n]+)\]\(\s*\{\{\s*(?:Link|AccessLink)\s*\}\}\s*\)/g, "$1")
+    .split("\n")
+    .filter((line) => !/^\s*([^\n:{}]{0,40}:)?\s*\{\{\s*(Button|Link|AccessLink)\s*(\|[^}]*)?\}\}\s*$/.test(line))
+    .map((line) => line.replace(/\s*\{\{\s*(Button|Link|AccessLink)\s*(\|[^}]*)?\}\}/g, ""))
+    .join("\n")
+    .replace(/\n{3,}/g, "\n\n");
+}
+
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 function rowProblems(row, index) {
   const problems = [];
-  const email = value(row, "email"), link = value(row, "link"), prefix = $("linkPrefix").value.trim();
+  const email = value(row, "email");
   if (!value(row, "firstName")) problems.push("no first name");
+  if (!value(row, "lastName")) problems.push("no last name");
   if (!EMAIL_RE.test(email)) problems.push("bad email");
-  if (!/^https?:\/\/\S+$/.test(link)) problems.push("bad link");
-  else if (prefix && !link.startsWith(prefix)) problems.push("link doesn't match prefix");
+  if (hasLink() && usesLink()) {
+    const link = value(row, "link"), prefix = $("linkPrefix").value.trim();
+    if (!link) problems.push("no link");
+    else if (!/^https?:\/\/\S+$/.test(link)) problems.push("bad link");
+    else if (prefix && !link.startsWith(prefix)) problems.push("link doesn't match prefix");
+  }
   const lower = email.toLowerCase();
   if (email && rows.findIndex((r) => value(r, "email").toLowerCase() === lower) !== index) problems.push("duplicate email");
   if (/\.(test|invalid|example)$|@example\.(com|org|net)$/i.test(email)) problems.push("test address");
@@ -378,7 +433,8 @@ function renderRows() {
     `<div><strong>${rows.length}</strong>rows</div><div><strong>${valid}</strong>ready to send</div>` +
     `<div><strong>${rows.length - valid}</strong>will be skipped</div>` +
     `<div><strong>${sendState.filter((s) => s === "sent").length}</strong>already sent</div>`;
-  const head = `<tr><th>#</th><th>First</th><th>Last</th><th>Email</th><th>Link</th><th>Status</th></tr>`;
+  const showLink = hasLink();
+  const head = `<tr><th>#</th><th>First</th><th>Last</th><th>Email</th>${showLink ? "<th>Link</th>" : ""}<th>Status</th></tr>`;
   $("rowsTable").innerHTML = head + rows.map((row, i) => {
     const p = problemsByRow[i];
     const s = sendState[i];
@@ -388,18 +444,51 @@ function renderRows() {
       : '<span class="pill ok">ready</span>';
     const link = value(row, "link");
     return `<tr><td>${i + 1}</td><td>${escapeHtml(value(row, "firstName"))}</td><td>${escapeHtml(value(row, "lastName"))}</td>` +
-      `<td>${escapeHtml(value(row, "email"))}</td><td>${link ? "…" + escapeHtml(link.slice(-6)) : ""}</td><td>${status}</td></tr>`;
+      `<td>${escapeHtml(value(row, "email"))}</td>${showLink ? `<td>${link ? "…" + escapeHtml(link.slice(-6)) : ""}</td>` : ""}<td>${status}</td></tr>`;
   }).join("");
-  if (!FIELDS.every(mapped)) { $("csvMsg").textContent = "Match all four fields to continue."; $("csvMsg").className = "msg warn"; }
+  renderColumnList();
   updateButtons();
+}
+
+// ---------- every CSV column is a merge field ----------
+const ROLE_TAG = { firstName: "FirstName", lastName: "LastName", email: "Email", link: "Link" };
+// The tag to insert for a column: the friendly name if it's a matched role, otherwise the column name itself.
+function tagForColumn(header) {
+  const role = FIELDS.find((f) => mapped(f) === header);
+  return role ? ROLE_TAG[role] : header;
+}
+function sampleFor(header) {
+  const preferred = rows[previewIndex]?.[header];
+  if (preferred) return preferred;
+  return rows.find((r) => r[header])?.[header] ?? "";
+}
+function renderColumnList() {
+  const box = $("columnList");
+  box.innerHTML = "";
+  for (const h of headers) {
+    const role = FIELDS.find((f) => mapped(f) === h);
+    const tag = tagForColumn(h);
+    const empty = rows.filter((r) => !r[h]).length;
+    const sample = role === "link" ? "(each person's own link)" : sampleFor(h);
+    const chip = document.createElement("button");
+    chip.type = "button"; chip.className = "colchip" + (role ? " role" : "");
+    chip.title = `Insert {{${tag}}} into the email body`;
+    const roleNote = role && FIELD_LABELS[role].toLowerCase() !== h.toLowerCase() ? ` → ${FIELD_LABELS[role]}` : "";
+    chip.innerHTML = `<b>{{${escapeHtml(tag)}}}</b><span>${escapeHtml(h)}${roleNote}</span><br>` +
+      `<span>e.g. ${escapeHtml(sample ? String(sample).slice(0, 40) : "(empty)")}${empty ? ` · ${empty} empty` : ""}</span>`;
+    chip.onclick = () => insertAtCursor($("body"), `{{${tag}}}`);
+    box.append(chip);
+  }
 }
 
 // ---------- template / merge ----------
 const BASE_TAGS = { FirstName: "firstName", LastName: "lastName", Email: "email", Link: "link" };
 const TAG_ALIASES = { AccessLink: "link", First: "firstName", Last: "lastName" }; // older templates keep working
 function renderTagButtons() {
-  const extra = headers.filter((h) => !Object.values(BASE_TAGS).map(mapped).includes(h));
-  const tags = [...Object.keys(BASE_TAGS), "Button", "SenderName", "Signature", ...extra];
+  const used = Object.values(BASE_TAGS).map(mapped);
+  const extra = headers.filter((h) => !used.includes(h));
+  const linkTags = hasLink() || !rows.length ? ["Link", "Button"] : [];
+  const tags = ["FirstName", "LastName", "Email", ...linkTags, "SenderName", "Signature", ...extra];
   $("tagButtons").innerHTML = "";
   for (const t of tags) {
     const b = document.createElement("button");
@@ -414,18 +503,51 @@ function insertAtCursor(el, text) {
   el.focus(); el.selectionStart = el.selectionEnd = s + text.length;
   el.dispatchEvent(new Event("input"));
 }
-function mergeValue(row, tag) {
-  if (BASE_TAGS[tag]) return value(row, BASE_TAGS[tag]);
-  if (TAG_ALIASES[tag]) return value(row, TAG_ALIASES[tag]);
-  if (tag === "SenderName") return $("fromName").value.trim();
-  if (tag === "Signature") return signatureText();
-  if (tag in row) return row[tag];
-  return null;
+// "{{% of Goal Raised|0%}}" → name "% of Goal Raised", fallback "0%" (used when that person's cell is empty)
+function parseTag(raw) {
+  const bar = raw.indexOf("|");
+  return bar === -1 ? { name: raw.trim(), fallback: undefined } : { name: raw.slice(0, bar).trim(), fallback: raw.slice(bar + 1).trim() };
 }
+const findHeader = (name) => headers.find((h) => h === name) ?? headers.find((h) => h.toLowerCase() === name.toLowerCase());
+function resolveTag(row, name) {
+  if (BASE_TAGS[name]) return value(row, BASE_TAGS[name]);
+  if (TAG_ALIASES[name]) return value(row, TAG_ALIASES[name]);
+  if (name === "SenderName") return $("fromName").value.trim();
+  if (name === "Signature") return signatureText();
+  const h = findHeader(name);
+  return h === undefined ? null : row[h] ?? "";
+}
+function mergeValue(row, tag) {
+  const { name, fallback } = parseTag(tag);
+  const v = resolveTag(row, name);
+  if (v === null) return null;
+  return v === "" && fallback !== undefined ? fallback : v;
+}
+const SPECIAL_TAGS = new Set(["Button", "Link", "AccessLink", "SenderName", "Signature", ...Object.keys(BASE_TAGS), ...Object.keys(TAG_ALIASES)]);
 function unknownTags(text) {
-  const sample = rows[0] || Object.fromEntries(headers.map((h) => [h, ""]));
-  return [...text.matchAll(/\{\{\s*([^}]+?)\s*\}\}/g)].map((m) => m[1])
-    .filter((t) => t !== "Button" && !(t in BASE_TAGS) && !(t in TAG_ALIASES) && t !== "SenderName" && t !== "Signature" && mergeValue(sample, t) === null);
+  return [...text.matchAll(/\{\{\s*([^}]+?)\s*\}\}/g)].map((m) => parseTag(m[1]).name)
+    .filter((name) => !SPECIAL_TAGS.has(name) && findHeader(name) === undefined);
+}
+// Columns used in the email that are empty for some of the people who will receive it (and have no fallback).
+function emptyFieldWarnings() {
+  if (!rows.length) return [];
+  const used = [...`${$("subject").value}\n${$("body").value}`.matchAll(/\{\{\s*([^}]+?)\s*\}\}/g)].map((m) => parseTag(m[1]));
+  const recipients = rows.filter((r, i) => !rowProblems(r, i).length);
+  const seen = new Set(), out = [];
+  for (const { name, fallback } of used) {
+    if (fallback !== undefined || seen.has(name) || ["Button", "Signature", "SenderName"].includes(name)) continue;
+    seen.add(name);
+    if (resolveTag(rows[0] ?? {}, name) === null) continue;
+    const empty = recipients.filter((r) => resolveTag(r, name) === "").length;
+    if (empty) out.push({ name, empty, total: recipients.length });
+  }
+  return out;
+}
+function renderEmptyNote() {
+  const w = emptyFieldWarnings();
+  $("emptyNote").innerHTML = w.map((x) =>
+    `<div><code>{{${escapeHtml(x.name)}}}</code> is empty for ${x.empty} of ${x.total} people, so they'd see a blank. ` +
+    `Add a fallback, e.g. <code>{{${escapeHtml(x.name)}|…}}</code>, or check your CSV.</div>`).join("");
 }
 
 // ---------- signature: "rich" keeps formatting/logo/icons (sanitized HTML), "plain" keeps text only ----------
@@ -629,8 +751,17 @@ function mergeHtml(template, row, forSend = false) {
     `<div style="background:#ffffff;border-radius:${header ? "0 0 16px 16px" : "16px"};padding:28px;font-family:Montserrat,Arial,sans-serif;font-size:15px;line-height:1.6;color:#0B2D44">${paragraphs}</div>` +
     `</div></body></html>`;
 }
+$("stripLinks").onclick = () => {
+  $("body").value = stripLinkParts($("body").value);
+  $("subject").value = stripLinkParts($("subject").value).replace(/\n/g, " ").trim();
+  $("subject").dispatchEvent(new Event("input"));
+  $("body").dispatchEvent(new Event("input"));
+};
 function renderPreview() {
   renderLinkNote();
+  renderEmptyNote();
+  $("noLinkNote").hidden = !(rows.length && !hasLink() && usesLink());
+  if (rows.length) { renderRows(); }
   const unknown = rows.length ? [...unknownTags($("subject").value), ...unknownTags($("body").value)] : [];
   if (!rows.length) {
     $("previewWho").textContent = "(import a CSV to preview)";
@@ -817,8 +948,9 @@ function blockers() {
   else if (!accountEmail) list.push("Signed in, but Google didn't share your email address. Sign out, sign in again, and allow “See your email address”.");
   if (!rows.length) list.push("Import a CSV (step 2).");
   else {
-    const missing = FIELDS.filter((f) => !mapped(f)).map((f) => FIELD_LABELS[f]);
-    if (missing.length) list.push(`Match these fields to a CSV column: ${missing.join(", ")}.`);
+    const missing = REQUIRED.filter((f) => !mapped(f)).map((f) => FIELD_LABELS[f]);
+    if (missing.length) list.push(`Your CSV needs ${missing.join(", ")}. Pick ${missing.length > 1 ? "those columns" : "that column"} in step 2.`);
+    if (!hasLink() && usesLink()) list.push("Your CSV has no personal link column, so {{Button}} / {{Link}} can't be used. Click “Remove link parts” under the body, or pick a link column in step 2.");
   }
   const bodyOnly = [...$("subject").value.matchAll(/\{\{\s*(Signature|Button)\s*\}\}/g)].map((m) => `{{${m[1]}}}`);
   if (bodyOnly.length) list.push(`${[...new Set(bodyOnly)].join(" and ")} can only be used in the body, not the subject.`);
@@ -827,7 +959,7 @@ function blockers() {
   return list;
 }
 function sendAllNote() {
-  if (!rows.length || !FIELDS.every(mapped)) return "";
+  if (!rows.length || !REQUIRED.every(mapped)) return "";
   const problems = rows.map(rowProblems);
   if (sendable().length) return "";
   if (sendState.some((s) => s === "sent") && sendState.every((s, i) => s === "sent" || problems[i].length)) return "Everyone who can receive this email has already been sent it.";

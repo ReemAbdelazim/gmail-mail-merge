@@ -9,8 +9,9 @@ Built for things like event access links, personal sign-up links, or anything el
 ## Features
 
 - **Sign in with Google.** Mail is sent from your own Gmail or Google Workspace account via the Gmail API.
-- **Import any CSV** and match its columns to First name, Last name, Email and Personal link (auto-detected where possible).
-- **Template with merge fields.** Use `{{FirstName}}`, `{{LastName}}`, `{{Email}}`, `{{Link}}`, `{{SenderName}}`, or **any CSV column** like `{{Company}}`.
+- **Import any CSV.** **First name, Last name and Email are required**; a **personal link** column is optional. Columns are auto-detected and every other column is listed with an example value.
+- **Every CSV column is a merge field**, e.g. `{{Delegation name}}` or `{{% of Goal Raised}}`, plus `{{FirstName}}`, `{{LastName}}`, `{{Email}}`, `{{SenderName}}`. Add a fallback for empty cells with `{{% of Goal Raised|0%}}`; the tool warns when a field you use is empty for some people.
+- **No link column? No problem.** The button/link options and settings are hidden, and anything link-related in the template is flagged with a one-click removal.
 - **Email signature:** paste your existing signature with its **formatting, colours, logo and social icons** (copied from a sent Gmail email or Gmail → Settings → Signature). It is sanitized (scripts, tracking and unsafe links removed). Signature images are **attached inline to each email** so recipients see them even when the original is private or embedded; any image that can't be read is flagged, and you can swap in the file from your computer. A **text-only** mode is also available. Placed at the end, or wherever you put `{{Signature}}`.
 - **`{{Button}}`** renders a styled call-to-action button with that person's own link hidden behind it. Or put the link behind any words with `[Open my invite]({{Link}})`. The tool warns (with a one-click fix) if the raw link would also show as text. Button text, colour and an optional header are configurable.
 - **Clear "not ready" messages** explain exactly why sending is blocked (not signed in, unmatched columns, unknown fields, or every row skipped).
@@ -56,12 +57,14 @@ Requires Node 18+. No dependencies.
 
 ## CSV format
 
-Any column names work. You match them in the tool. See [`example.csv`](example.csv):
+Any column names work. Only First name, Last name and Email are required. See [`example.csv`](example.csv):
 
 ```csv
-First name,Last name,Email,Company,Personal link
-Ada,Lovelace,ada@example.com,Analytical Engines,https://example.com/invite?t=abc123
+First name,Last name,Email,Team,Personal link,% of Goal Raised
+Ada,Lovelace,ada@example.com,Analytical Engines,https://example.com/invite?t=abc123,45%
 ```
+
+Then write e.g. `{{Team}} has raised {{% of Goal Raised|0%}} of its goal!`
 
 ## Sending limits
 

@@ -1,4 +1,4 @@
-First name,Last name,Email,Company,Personal link
-Ada,Lovelace,ada@example.com,Analytical Engines,https://example.com/invite?t=abc123
-Alan,Turing,alan@example.com,Bletchley Park,https://example.com/invite?t=def456
-Grace,Hopper,grace@example.com,US Navy,https://example.com/invite?t=ghi789
+First name,Last name,Email,Team,Personal link,% of Goal Raised
+Ada,Lovelace,ada@example.com,Analytical Engines,https://example.com/invite?t=abc123,45%
+Alan,Turing,alan@example.com,Bletchley Park,https://example.com/invite?t=def456,
+Grace,Hopper,grace@example.com,US Navy,https://example.com/invite?t=ghi789,80%
